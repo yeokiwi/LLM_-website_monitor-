@@ -9,6 +9,7 @@ require('./db');
 const websitesRouter = require('./routes/websites');
 const scansRouter = require('./routes/scans');
 const uploadRouter = require('./routes/upload');
+const { getLLMInfo } = require('./services/llmService');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -35,11 +36,13 @@ app.use('/api/websites/:websiteId/scans', (req, res, next) => {
 
 // Health check
 app.get('/api/health', (req, res) => {
-  const provider = process.env.LLM_PROVIDER || 'claude';
+  const llm = getLLMInfo();
   const scraper = process.env.BRAVE_API_KEY ? 'brave' : 'direct';
   res.json({
     status: 'ok',
-    llmProvider: provider,
+    llmProvider: llm.provider,
+    llmModel: llm.model,
+    llmBaseUrl: llm.baseUrl,
     scraperMethod: scraper,
   });
 });
@@ -53,9 +56,11 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  const provider = process.env.LLM_PROVIDER || 'claude';
+  const llm = getLLMInfo();
   const scraper = process.env.BRAVE_API_KEY ? 'Brave Search API' : 'Direct (axios+cheerio)';
   console.log(`\n🚀 Website Monitor backend running on http://localhost:${PORT}`);
-  console.log(`   LLM provider : ${provider}`);
+  console.log(`   LLM provider : ${llm.provider}`);
+  console.log(`   LLM model    : ${llm.model}`);
+  console.log(`   LLM base URL : ${llm.baseUrl}`);
   console.log(`   Scraper      : ${scraper}\n`);
 });

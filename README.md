@@ -1,6 +1,6 @@
 # Website Monitor
 
-A web-based application that uses an LLM (Claude or OpenAI) to monitor websites for changes over a user-defined time period. It stores snapshots of website content, diffs historical against current snapshots, and summarises what changed in plain English.
+A web-based application that uses an LLM to monitor websites for changes over a user-defined time period. It stores snapshots of website content, diffs historical against current snapshots, and summarises what changed in plain English. Supports Claude (Anthropic), OpenAI, and **any OpenAI-compatible endpoint** — including local models via Ollama or LM Studio, and hosted services such as Groq, Together AI, Mistral AI, DeepSeek, and Perplexity.
 
 ---
 
@@ -43,7 +43,7 @@ Website Monitor lets you track what changes on any website over time without man
 - **Manual or bulk website entry** — add sites one by one, or upload an Excel/CSV file containing a list of URLs
 - **Flexible time periods** — 30 days, 60 days, 90 days, or any custom number of days
 - **Brave Search API integration** — uses Brave's indexed, clean page content for change detection (direct HTTP scraping fallback when no Brave key is configured)
-- **LLM-powered change summaries** — Claude (Anthropic) or OpenAI GPT-4o, selected via a single environment variable
+- **Any OpenAI-compatible LLM** — works with Claude, OpenAI, Ollama, LM Studio, Groq, Together AI, Mistral AI, DeepSeek, Perplexity, and any other endpoint that speaks the OpenAI chat completions API; configured entirely via environment variables
 - **Persistent snapshot storage** — every scan stores a content snapshot in SQLite so future scans always have a baseline to compare against
 - **Intelligent scan statuses** — skips LLM calls when content is unchanged; handles first-time scans gracefully
 - **Scan history page** — paginated log of all past scans with expandable LLM summaries
@@ -113,7 +113,7 @@ Add websites  →  Choose period  →  Trigger scan
 │           ├── scraper.js      ← Brave API + axios/cheerio fallback
 │           ├── snapshotService.js  ← save / retrieve snapshots
 │           ├── diffService.js      ← compute line diff
-│           └── llmService.js       ← Claude / OpenAI abstraction
+│           └── llmService.js       ← Claude / any OpenAI-compatible endpoint
 └── frontend/
     ├── index.html
     ├── vite.config.js          ← proxies /api → localhost:3001
@@ -142,7 +142,7 @@ Add websites  →  Choose period  →  Trigger scan
 |---|---|---|
 | Node.js | 18 or later | https://nodejs.org |
 | npm | 8 or later | bundled with Node.js |
-| LLM API key | — | Anthropic **or** OpenAI (at least one required) |
+| LLM API key | — | One of: Anthropic, OpenAI, Groq, Together AI, Mistral, etc. — or none for local models (Ollama/LM Studio) |
 | Brave Search API key | — | Optional but recommended — https://api.search.brave.com |
 
 ---
@@ -163,24 +163,74 @@ cd backend
 cp .env.example .env
 ```
 
-Open `backend/.env` in a text editor and fill in your API keys:
+Open `backend/.env` in a text editor. Pick one of the configuration examples below and fill in your keys.
 
+**Option A — Claude (Anthropic)**
 ```dotenv
-PORT=3001
-
-# Choose your LLM provider: "claude" or "openai"
 LLM_PROVIDER=claude
-
-# Anthropic key (required when LLM_PROVIDER=claude)
+LLM_MODEL=claude-opus-4-6          # or claude-sonnet-4-6, etc.
 ANTHROPIC_API_KEY=sk-ant-...
+```
 
-# OpenAI key (required when LLM_PROVIDER=openai)
+**Option B — OpenAI**
+```dotenv
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4o                   # or gpt-4-turbo, gpt-3.5-turbo, etc.
 OPENAI_API_KEY=sk-...
+# OPENAI_BASE_URL=                 # leave blank for OpenAI's default endpoint
+```
 
-# Brave Search API key (optional — enables smarter content discovery)
+**Option C — Ollama (local, no API key needed)**
+```dotenv
+LLM_PROVIDER=ollama
+LLM_MODEL=llama3.2                 # any model you have pulled locally
+OPENAI_API_KEY=ollama              # placeholder — Ollama does not check it
+OPENAI_BASE_URL=http://localhost:11434/v1
+```
+
+**Option D — LM Studio (local)**
+```dotenv
+LLM_PROVIDER=lmstudio
+LLM_MODEL=mistral-7b-instruct      # match the model loaded in LM Studio
+OPENAI_API_KEY=lm-studio           # placeholder
+OPENAI_BASE_URL=http://localhost:1234/v1
+```
+
+**Option E — Groq**
+```dotenv
+LLM_PROVIDER=groq
+LLM_MODEL=llama-3.1-70b-versatile  # or mixtral-8x7b-32768, gemma2-9b-it, etc.
+OPENAI_API_KEY=gsk_...
+OPENAI_BASE_URL=https://api.groq.com/openai/v1
+```
+
+**Option F — Mistral AI**
+```dotenv
+LLM_PROVIDER=mistral
+LLM_MODEL=mistral-large-latest
+OPENAI_API_KEY=...
+OPENAI_BASE_URL=https://api.mistral.ai/v1
+```
+
+**Option G — Together AI**
+```dotenv
+LLM_PROVIDER=together
+LLM_MODEL=meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo
+OPENAI_API_KEY=...
+OPENAI_BASE_URL=https://api.together.xyz/v1
+```
+
+**Option H — DeepSeek**
+```dotenv
+LLM_PROVIDER=deepseek
+LLM_MODEL=deepseek-chat
+OPENAI_API_KEY=...
+OPENAI_BASE_URL=https://api.deepseek.com/v1
+```
+
+Add your Brave Search API key (recommended) and leave the SQLite path as-is:
+```dotenv
 BRAVE_API_KEY=BSA...
-
-# SQLite file location (created automatically on first run)
 DB_PATH=./data/monitor.db
 ```
 
@@ -217,6 +267,8 @@ Expected output:
 ```
 🚀 Website Monitor backend running on http://localhost:3001
    LLM provider : claude
+   LLM model    : claude-opus-4-6
+   LLM base URL : https://api.anthropic.com
    Scraper      : Brave Search API
 ```
 
@@ -261,11 +313,29 @@ All variables are set in `backend/.env`.
 | Variable | Default | Required | Description |
 |---|---|---|---|
 | `PORT` | `3001` | No | Port the Express server listens on |
-| `LLM_PROVIDER` | `claude` | Yes | `claude` or `openai` |
-| `ANTHROPIC_API_KEY` | — | When using Claude | API key from https://console.anthropic.com |
-| `OPENAI_API_KEY` | — | When using OpenAI | API key from https://platform.openai.com |
+| `LLM_PROVIDER` | `claude` | Yes | `claude` → Anthropic SDK. Any other value → OpenAI-compatible SDK |
+| `LLM_MODEL` | see below | No | Model name to use. Defaults to `claude-opus-4-6` (Claude) or `gpt-4o` (all others) |
+| `ANTHROPIC_API_KEY` | — | When `LLM_PROVIDER=claude` | API key from https://console.anthropic.com |
+| `OPENAI_API_KEY` | — | For hosted services | API key. Set to any non-empty string for local models that don't require auth |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | No | Base URL for the OpenAI-compatible endpoint (see provider table below) |
 | `BRAVE_API_KEY` | — | Recommended | API key from https://api.search.brave.com |
 | `DB_PATH` | `./data/monitor.db` | No | Path to the SQLite database file |
+
+### Supported LLM Providers
+
+| Provider | `LLM_PROVIDER` | `OPENAI_BASE_URL` | Key required |
+|---|---|---|---|
+| Anthropic Claude | `claude` | *(N/A)* | Yes — `ANTHROPIC_API_KEY` |
+| OpenAI | `openai` | *(omit)* | Yes — `OPENAI_API_KEY` |
+| Ollama (local) | any, e.g. `ollama` | `http://localhost:11434/v1` | No (set placeholder) |
+| LM Studio (local) | any, e.g. `lmstudio` | `http://localhost:1234/v1` | No (set placeholder) |
+| Groq | `groq` | `https://api.groq.com/openai/v1` | Yes |
+| Together AI | `together` | `https://api.together.xyz/v1` | Yes |
+| Mistral AI | `mistral` | `https://api.mistral.ai/v1` | Yes |
+| DeepSeek | `deepseek` | `https://api.deepseek.com/v1` | Yes |
+| Perplexity | `perplexity` | `https://api.perplexity.ai` | Yes |
+| Azure OpenAI | `azure` | `https://<resource>.openai.azure.com/openai/deployments/<deploy>` | Yes |
+| Any other | any label | your endpoint URL | Depends on provider |
 
 ---
 
@@ -360,7 +430,7 @@ All endpoints are prefixed with `/api`.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/health` | Returns `{ status, llmProvider, scraperMethod }` |
+| `GET` | `/api/health` | Returns `{ status, llmProvider, llmModel, llmBaseUrl, scraperMethod }` |
 
 ---
 
@@ -370,17 +440,26 @@ All endpoints are prefixed with `/api`.
 Run `npm install` inside the `backend/` directory. Native modules require a working C++ build toolchain (`build-essential` on Linux, Xcode CLI tools on macOS).
 
 **`Error: ANTHROPIC_API_KEY is not set`**
-Ensure `backend/.env` exists and contains a valid key. The `.env` file is not committed to git — you must create it from `.env.example`.
+Ensure `backend/.env` exists and `LLM_PROVIDER=claude` with a valid `ANTHROPIC_API_KEY`. The `.env` file is never committed — create it from `.env.example`.
+
+**Ollama / LM Studio scan returns an LLM error**
+- Confirm the local server is running (`ollama serve` or LM Studio's server tab).
+- Verify `OPENAI_BASE_URL` matches the port shown by the local server.
+- Ensure `LLM_MODEL` matches a model you have actually downloaded (e.g. `ollama pull llama3.2`).
+- `OPENAI_API_KEY` must be set to a non-empty string even if the value is ignored (e.g. `OPENAI_API_KEY=ollama`).
+
+**Groq / Together / Mistral returns a 401 error**
+Double-check that `OPENAI_API_KEY` contains the correct API key for that provider, and that `OPENAI_BASE_URL` matches the provider's documented base URL exactly (no trailing slash).
 
 **Scans return `status: error` with a network message**
 - The target website may be blocking automated requests. Try enabling the Brave Search API (`BRAVE_API_KEY`) which uses Brave's indexed content rather than direct HTTP fetches.
 - Check that the URL includes the `https://` prefix and is publicly accessible.
 
-**`LLM_PROVIDER=openai` but getting Claude errors**
-Make sure `OPENAI_API_KEY` is set in `.env` and that `LLM_PROVIDER` is exactly `openai` (lowercase).
-
 **Frontend shows "Failed to load websites"**
 Confirm the backend is running on port `3001`. The Vite dev server proxies `/api` requests to `http://localhost:3001` automatically.
+
+**Not sure which LLM is active?**
+Call `GET /api/health`. The response includes `llmProvider`, `llmModel`, and `llmBaseUrl` so you can confirm the exact configuration that is in use.
 
 **First scan always shows "No Changes" on the next run**
 This is expected if the site's content did not change between the two scans. The snapshot from the first run becomes the baseline; a difference will only appear once the site actually updates within your chosen period.
