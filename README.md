@@ -18,7 +18,13 @@ A web-based application that uses an LLM to monitor websites for changes over a 
   - [3. Install dependencies](#3-install-dependencies)
 - [Running the Application](#running-the-application)
   - [Development mode](#development-mode)
-  - [Production mode](#production-mode)
+  - [Production mode (Docker)](#production-mode-docker)
+- [Deploying to Railway](#deploying-to-railway)
+  - [1. Push your repo to GitHub](#1-push-your-repo-to-github)
+  - [2. Create a new Railway project](#2-create-a-new-railway-project)
+  - [3. Add a persistent volume for SQLite](#3-add-a-persistent-volume-for-sqlite)
+  - [4. Set environment variables](#4-set-environment-variables)
+  - [5. Deploy](#5-deploy)
 - [Environment Variables](#environment-variables)
 - [Using the Application](#using-the-application)
   - [Adding websites](#adding-websites)
@@ -288,21 +294,76 @@ Expected output:
 
 Open **http://localhost:5173** in your browser.
 
-### Production mode
+### Production mode (Docker)
 
-Build the frontend into static files and serve everything from the backend:
+The included `Dockerfile` performs a multi-stage build: it builds the React app in one stage, then copies the compiled assets into the Express container. Express serves the static files automatically when `NODE_ENV=production`.
 
 ```bash
-# Build the frontend
-cd frontend
-npm run build          # outputs to frontend/dist/
+# Build the image
+docker build -t website-monitor .
 
-# Start the backend (serves API only; host frontend/dist with any static server)
-cd ../backend
-npm start
+# Run with a local volume for the SQLite database
+docker run -p 3001:3001 \
+  -v "$(pwd)/data:/data" \
+  -e NODE_ENV=production \
+  -e LLM_PROVIDER=claude \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e BRAVE_API_KEY=BSA... \
+  website-monitor
 ```
 
-To serve the built frontend alongside the backend, copy `frontend/dist` to a web server (nginx, Apache, etc.) or extend `backend/src/server.js` to serve the `dist` folder with `express.static`.
+Open http://localhost:3001 — Express serves both the API and the React frontend on the same port.
+
+---
+
+## Deploying to Railway
+
+Railway runs the `Dockerfile` at the repo root and injects environment variables from the dashboard. The app runs as a single service (API + frontend on one port).
+
+### 1. Push your repo to GitHub
+
+```bash
+git remote add origin https://github.com/<your-username>/<your-repo>.git
+git push -u origin main
+```
+
+### 2. Create a new Railway project
+
+1. Go to [railway.com](https://railway.com) and sign in.
+2. Click **New Project** → **Deploy from GitHub repo**.
+3. Select your repository. Railway detects the `Dockerfile` automatically via `railway.toml`.
+
+### 3. Add a persistent volume for SQLite
+
+SQLite stores data on disk. Without a persistent volume the database resets on every deploy.
+
+1. In your Railway service, go to **Settings** → **Volumes**.
+2. Click **Add Volume**.
+3. Set **Mount Path** to `/data`.
+4. Railway will retain `/data` across deploys and restarts.
+
+### 4. Set environment variables
+
+In your Railway service go to **Variables** and add:
+
+| Variable | Value |
+|---|---|
+| `NODE_ENV` | `production` |
+| `LLM_PROVIDER` | `claude` *(or your chosen provider)* |
+| `LLM_MODEL` | *(optional — uses provider default if omitted)* |
+| `ANTHROPIC_API_KEY` | `sk-ant-...` *(if using Claude)* |
+| `OPENAI_API_KEY` | `sk-...` *(if using an OpenAI-compatible provider)* |
+| `OPENAI_BASE_URL` | *(if using a non-OpenAI endpoint)* |
+| `BRAVE_API_KEY` | `BSA...` *(recommended)* |
+| `DB_PATH` | `/data/monitor.db` |
+
+> `PORT` is set automatically by Railway — do not add it manually.
+
+### 5. Deploy
+
+Click **Deploy** (or push a new commit — Railway redeploys automatically on every push to the linked branch).
+
+Once the build completes, Railway provides a public URL such as `https://your-app.up.railway.app`. The health check endpoint `/api/health` is used by Railway to confirm the service is ready.
 
 ---
 

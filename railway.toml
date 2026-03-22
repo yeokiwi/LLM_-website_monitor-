@@ -1,0 +1,14 @@
+[build]
+# Use the Dockerfile at the repo root for the build
+builder      = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Railway injects $PORT automatically; the app reads it via process.env.PORT
+startCommand       = "node src/server.js"
+restartPolicyType  = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+# Health-check — Railway marks the deploy healthy once this endpoint returns 200
+healthcheckPath    = "/api/health"
+healthcheckTimeout = 30

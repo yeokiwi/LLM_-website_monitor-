@@ -1,5 +1,6 @@
 require('dotenv').config();
 
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 
@@ -46,6 +47,19 @@ app.get('/api/health', (req, res) => {
     scraperMethod: scraper,
   });
 });
+
+// ---------------------------------------------------------------------------
+// Serve built React frontend in production
+// (Dockerfile copies frontend/dist → /app/public inside the container)
+// ---------------------------------------------------------------------------
+if (process.env.NODE_ENV === 'production') {
+  const distPath = path.join(__dirname, '../public');
+  app.use(express.static(distPath));
+  // SPA fallback — let React Router handle all non-API routes
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Global error handler
