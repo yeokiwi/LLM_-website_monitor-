@@ -306,6 +306,9 @@ docker build -t website-monitor .
 docker run -p 3001:3001 \
   -v "$(pwd)/data:/data" \
   -e NODE_ENV=production \
+  -e AUTH_USERNAME=admin \
+  -e AUTH_PASSWORD=your-password \
+  -e JWT_SECRET=your-random-secret \
   -e LLM_PROVIDER=claude \
   -e ANTHROPIC_API_KEY=sk-ant-... \
   -e BRAVE_API_KEY=BSA... \
@@ -349,6 +352,10 @@ In your Railway service go to **Variables** and add:
 | Variable | Value |
 |---|---|
 | `NODE_ENV` | `production` |
+| `AUTH_USERNAME` | your chosen username (e.g. `admin`) |
+| `AUTH_PASSWORD` | your chosen password |
+| `JWT_SECRET` | a long random string (generate with the command below) |
+| `JWT_EXPIRES_IN` | `24h` *(or `7d`, `30d`, etc.)* |
 | `LLM_PROVIDER` | `claude` *(or your chosen provider)* |
 | `LLM_MODEL` | *(optional — uses provider default if omitted)* |
 | `ANTHROPIC_API_KEY` | `sk-ant-...` *(if using Claude)* |
@@ -358,6 +365,11 @@ In your Railway service go to **Variables** and add:
 | `DB_PATH` | `/data/monitor.db` |
 
 > `PORT` is set automatically by Railway — do not add it manually.
+
+Generate a secure `JWT_SECRET` locally and paste the output into Railway:
+> ```bash
+> node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+> ```
 
 ### 5. Deploy
 
@@ -374,6 +386,10 @@ All variables are set in `backend/.env`.
 | Variable | Default | Required | Description |
 |---|---|---|---|
 | `PORT` | `3001` | No | Port the Express server listens on |
+| **`AUTH_USERNAME`** | `admin` | No | Login username |
+| **`AUTH_PASSWORD`** | — | **Yes** | Login password (no default — must be set) |
+| **`JWT_SECRET`** | `change-me-in-production` | **Yes** | Secret used to sign session tokens — use a long random string |
+| **`JWT_EXPIRES_IN`** | `24h` | No | Session duration e.g. `12h`, `7d`, `30d` |
 | `LLM_PROVIDER` | `claude` | Yes | `claude` → Anthropic SDK. Any other value → OpenAI-compatible SDK |
 | `LLM_MODEL` | see below | No | Model name to use. Defaults to `claude-opus-4-6` (Claude) or `gpt-4o` (all others) |
 | `ANTHROPIC_API_KEY` | — | When `LLM_PROVIDER=claude` | API key from https://console.anthropic.com |
@@ -381,6 +397,11 @@ All variables are set in `backend/.env`.
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | No | Base URL for the OpenAI-compatible endpoint (see provider table below) |
 | `BRAVE_API_KEY` | — | Recommended | API key from https://api.search.brave.com |
 | `DB_PATH` | `./data/monitor.db` | No | Path to the SQLite database file |
+
+> **Generate a secure `JWT_SECRET`:**
+> ```bash
+> node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+> ```
 
 ### Supported LLM Providers
 

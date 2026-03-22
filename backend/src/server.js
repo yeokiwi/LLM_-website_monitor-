@@ -10,6 +10,8 @@ require('./db');
 const websitesRouter = require('./routes/websites');
 const scansRouter = require('./routes/scans');
 const uploadRouter = require('./routes/upload');
+const authRouter = require('./routes/auth');
+const { requireAuth } = require('./middleware/auth');
 const { getLLMInfo } = require('./services/llmService');
 
 const app = express();
@@ -25,17 +27,11 @@ app.use(express.urlencoded({ extended: true }));
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
-app.use('/api/websites', websitesRouter);
-app.use('/api/scans', scansRouter);
-app.use('/api/upload', uploadRouter);
 
-// Website-specific scans shortcut
-app.use('/api/websites/:websiteId/scans', (req, res, next) => {
-  req.url = `/website/${req.params.websiteId}`;
-  scansRouter(req, res, next);
-});
+// Public — no token required
+app.use('/api/auth', authRouter);
 
-// Health check
+// Health check is public so Railway's healthcheck works without a token
 app.get('/api/health', (req, res) => {
   const llm = getLLMInfo();
   const scraper = process.env.BRAVE_API_KEY ? 'brave' : 'direct';
@@ -46,6 +42,17 @@ app.get('/api/health', (req, res) => {
     llmBaseUrl: llm.baseUrl,
     scraperMethod: scraper,
   });
+});
+
+// Protected — all routes below require a valid JWT
+app.use('/api/websites', requireAuth, websitesRouter);
+app.use('/api/scans',    requireAuth, scansRouter);
+app.use('/api/upload',   requireAuth, uploadRouter);
+
+// Website-specific scans shortcut
+app.use('/api/websites/:websiteId/scans', requireAuth, (req, res, next) => {
+  req.url = `/website/${req.params.websiteId}`;
+  scansRouter(req, res, next);
 });
 
 // ---------------------------------------------------------------------------
