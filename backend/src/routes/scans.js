@@ -112,70 +112,46 @@ router.post('/', async (req, res) => {
 // Core scan logic for a single website
 // ---------------------------------------------------------------------------
 async function runSingleScan(website, periodDays) {
-  // Create a pending scan record
-  const pending = db
-    .prepare(
-      `
-      INSERT INTO scan_results (website_id, period_days, new_snapshot_id, status)
-      VALUES (?, ?, 0, 'running')
-    `
-    )
-    .run(website.id, periodDays);
-
-  const scanId = pending.lastInsertRowid;
+  let newSnapshot = null;
 
   try {
     // 1. Scrape current content
     const { contentText, source } = await scrapeWebsite(website.url);
 
     // 2. Save new snapshot
-    const newSnapshot = saveSnapshot(website.id, contentText);
+    newSnapshot = saveSnapshot(website.id, contentText);
 
-    // 3. Update scan record with new snapshot ID
-    db.prepare('UPDATE scan_results SET new_snapshot_id = ? WHERE id = ?').run(
-      newSnapshot.id,
-      scanId
-    );
-
-    // 4. Find baseline snapshot from the specified period
+    // 3. Find baseline snapshot from the specified period
     const oldSnapshot = findBaselineSnapshot(website.id, periodDays);
 
     // --- First scan: no history ---
     if (!oldSnapshot || oldSnapshot.id === newSnapshot.id) {
-      db.prepare(
-        `UPDATE scan_results
-         SET status = 'no_history',
-             llm_summary = ?
-         WHERE id = ?`
-      ).run(
-        `This is the first scan for ${website.url}. A baseline snapshot has been recorded. Run the scan again after ${periodDays} day(s) to see changes.`,
-        scanId
-      );
+      const llm_summary = `This is the first scan for ${website.url}. A baseline snapshot has been recorded. Run the scan again after ${periodDays} day(s) to see changes.`;
+      const result = db.prepare(
+        `INSERT INTO scan_results (website_id, period_days, new_snapshot_id, status, llm_summary)
+         VALUES (?, ?, ?, 'no_history', ?)`
+      ).run(website.id, periodDays, newSnapshot.id, llm_summary);
 
-      return { scanId, websiteId: website.id, url: website.url, status: 'no_history', source };
+      return { scanId: result.lastInsertRowid, websiteId: website.id, url: website.url, status: 'no_history', source };
     }
 
-    // 5. Check if content changed
+    // 4. Check if content changed
     const { diffText, hasChanges, addedLines, removedLines } = computeDiff(
       oldSnapshot.content_text,
       contentText
     );
 
     if (!hasChanges) {
-      db.prepare(
-        `UPDATE scan_results
-         SET old_snapshot_id = ?,
-             status = 'no_changes',
-             llm_summary = ?
-         WHERE id = ?`
+      const result = db.prepare(
+        `INSERT INTO scan_results (website_id, period_days, old_snapshot_id, new_snapshot_id, status, llm_summary)
+         VALUES (?, ?, ?, ?, 'no_changes', ?)`
       ).run(
-        oldSnapshot.id,
-        `No changes detected on ${website.url} over the past ${periodDays} day(s).`,
-        scanId
+        website.id, periodDays, oldSnapshot.id, newSnapshot.id,
+        `No changes detected on ${website.url} over the past ${periodDays} day(s).`
       );
 
       return {
-        scanId,
+        scanId: result.lastInsertRowid,
         websiteId: website.id,
         url: website.url,
         status: 'no_changes',
@@ -183,7 +159,7 @@ async function runSingleScan(website, periodDays) {
       };
     }
 
-    // 6. Get LLM summary
+    // 5. Get LLM summary
     const llmSummary = await summarizeChanges({
       websiteUrl: website.url,
       periodDays,
@@ -192,23 +168,18 @@ async function runSingleScan(website, periodDays) {
       diffText,
     });
 
-    // 7. Save completed result
-    db.prepare(
-      `UPDATE scan_results
-       SET old_snapshot_id = ?,
-           diff_summary = ?,
-           llm_summary = ?,
-           status = 'completed'
-       WHERE id = ?`
+    // 6. Save completed result
+    const result = db.prepare(
+      `INSERT INTO scan_results (website_id, period_days, old_snapshot_id, new_snapshot_id, diff_summary, llm_summary, status)
+       VALUES (?, ?, ?, ?, ?, ?, 'completed')`
     ).run(
-      oldSnapshot.id,
+      website.id, periodDays, oldSnapshot.id, newSnapshot.id,
       `+${addedLines} lines / -${removedLines} lines`,
-      llmSummary,
-      scanId
+      llmSummary
     );
 
     return {
-      scanId,
+      scanId: result.lastInsertRowid,
       websiteId: website.id,
       url: website.url,
       status: 'completed',
@@ -219,11 +190,15 @@ async function runSingleScan(website, periodDays) {
   } catch (err) {
     console.error(`Scan failed for ${website.url}:`, err.message);
 
-    db.prepare(
-      `UPDATE scan_results
-       SET status = 'error', error_message = ?
-       WHERE id = ?`
-    ).run(err.message, scanId);
+    // Only write an error record if we at least have a snapshot to reference
+    let scanId = null;
+    if (newSnapshot) {
+      const result = db.prepare(
+        `INSERT INTO scan_results (website_id, period_days, new_snapshot_id, status, error_message)
+         VALUES (?, ?, ?, 'error', ?)`
+      ).run(website.id, periodDays, newSnapshot.id, err.message);
+      scanId = result.lastInsertRowid;
+    }
 
     return {
       scanId,
