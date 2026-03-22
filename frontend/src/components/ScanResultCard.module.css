@@ -33,7 +33,7 @@
 .running    { background: #fef9c3; color: #b45309; }
 
 .site { display: flex; flex-direction: column; min-width: 0; }
-.siteName { font-weight: 600; font-size: 0.9rem; truncate; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.siteName { font-weight: 600; font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .siteUrl { font-size: 0.78rem; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .diffBadge { font-size: 0.78rem; background: #e0e7ff; color: #4338ca; padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
