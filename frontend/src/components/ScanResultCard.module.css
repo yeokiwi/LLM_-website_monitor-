@@ -1,0 +1,68 @@
+.card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  overflow: hidden;
+  transition: box-shadow 0.15s;
+}
+.card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.07); }
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  cursor: pointer;
+  gap: 12px;
+}
+.headerLeft { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.headerRight { display: flex; align-items: center; gap: 10px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+
+.badge {
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 20px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.completed  { background: #dcfce7; color: #15803d; }
+.noChanges  { background: #f3f4f6; color: #6b7280; }
+.noHistory  { background: #eff6ff; color: #2563eb; }
+.error      { background: #fee2e2; color: #dc2626; }
+.running    { background: #fef9c3; color: #b45309; }
+
+.site { display: flex; flex-direction: column; min-width: 0; }
+.siteName { font-weight: 600; font-size: 0.9rem; truncate; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.siteUrl { font-size: 0.78rem; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.diffBadge { font-size: 0.78rem; background: #e0e7ff; color: #4338ca; padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
+.period { font-size: 0.78rem; color: #9ca3af; }
+.date { font-size: 0.78rem; color: #9ca3af; white-space: nowrap; }
+.toggle { color: #9ca3af; font-size: 0.8rem; }
+
+.body { padding: 0 18px 18px; border-top: 1px solid #f3f4f6; margin-top: -1px; }
+
+.summary { margin-top: 14px; }
+.summaryTitle { font-size: 0.82rem; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.summaryText {
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: #374151;
+  white-space: pre-wrap;
+  background: #f9fafb;
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.info { margin-top: 14px; font-size: 0.88rem; color: #6b7280; font-style: italic; }
+
+.errorBox {
+  margin-top: 14px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 0.88rem;
+  color: #b91c1c;
+}

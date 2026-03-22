@@ -1,0 +1,25 @@
+.page { display: flex; flex-direction: column; gap: 20px; }
+
+.header { display: flex; align-items: baseline; gap: 12px; }
+.title { font-size: 1.4rem; font-weight: 700; color: #111827; }
+.count { font-size: 0.85rem; color: #9ca3af; }
+
+.error { color: #ef4444; font-size: 0.88rem; }
+.loading { color: #9ca3af; font-size: 0.95rem; text-align: center; padding: 40px; }
+.empty { color: #9ca3af; font-size: 0.95rem; text-align: center; padding: 60px 40px; background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; }
+
+.list { display: flex; flex-direction: column; gap: 10px; }
+
+.pagination { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 8px; }
+.pageBtn {
+  padding: 8px 18px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 0.88rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.pageBtn:hover:not(:disabled) { background: #f3f4f6; }
+.pageBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+.pageInfo { font-size: 0.88rem; color: #6b7280; }
