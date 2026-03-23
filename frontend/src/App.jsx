@@ -4,6 +4,7 @@ import Dashboard from './pages/Dashboard';
 import History from './pages/History';
 import LoginPage from './pages/LoginPage';
 import ReportPage from './pages/ReportPage';
+import HelpPage from './pages/HelpPage';
 import { getHealth, getMe, storeSession, clearSession, getStoredToken, getStoredUser } from './api/client';
 import styles from './App.module.css';
 
@@ -69,6 +70,9 @@ export default function App() {
             <NavLink to="/history" className={({ isActive }) => isActive ? styles.active : ''}>
               Scan History
             </NavLink>
+            <NavLink to="/help" className={({ isActive }) => isActive ? styles.active : ''}>
+              Help
+            </NavLink>
           </nav>
           <div className={styles.right}>
             {health && (
@@ -92,6 +96,7 @@ export default function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/history" element={<History />} />
           <Route path="/report/:id" element={<ReportPage />} />
+          <Route path="/help" element={<HelpPage />} />
         </Routes>
       </main>
     </div>
