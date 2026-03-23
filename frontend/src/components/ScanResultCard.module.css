@@ -44,7 +44,11 @@
 .body { padding: 0 18px 18px; border-top: 1px solid #f3f4f6; margin-top: -1px; }
 
 .summary { margin-top: 14px; }
-.summaryTitle { font-size: 0.82rem; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.summaryTitleRow { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; gap: 12px; }
+.summaryTitle { font-size: 0.82rem; font-weight: 700; color: #374151; text-transform: uppercase; letter-spacing: 0.5px; margin: 0; }
+.viewReportLink { font-size: 0.8rem; color: #6366f1; text-decoration: none; font-weight: 600; white-space: nowrap; flex-shrink: 0; }
+.viewReportLink:hover { text-decoration: underline; }
+
 .summaryText {
   font-size: 0.9rem;
   line-height: 1.65;
@@ -54,6 +58,27 @@
   border-radius: 8px;
   padding: 14px;
 }
+
+/* Preview for markdown reports */
+.previewBox {
+  background: #f9fafb;
+  border-radius: 8px;
+  padding: 14px;
+}
+.previewText {
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: #374151;
+  margin: 0 0 10px;
+}
+.previewMoreLink {
+  display: inline-block;
+  font-size: 0.82rem;
+  color: #6366f1;
+  font-weight: 600;
+  text-decoration: none;
+}
+.previewMoreLink:hover { text-decoration: underline; }
 
 .info { margin-top: 14px; font-size: 0.88rem; color: #6b7280; font-style: italic; }
 

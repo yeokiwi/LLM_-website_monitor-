@@ -53,7 +53,7 @@ router.get('/:id', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// GET /api/websites/:websiteId/scans — scans for one website
+// GET /api/scans/website/:websiteId — scans for one website
 // ---------------------------------------------------------------------------
 router.get('/website/:websiteId', (req, res) => {
   const scans = db
@@ -115,8 +115,8 @@ async function runSingleScan(website, periodDays) {
   let newSnapshot = null;
 
   try {
-    // 1. Scrape current content
-    const { contentText, source } = await scrapeWebsite(website.url);
+    // 1. Scrape current content (period-aware for freshness tuning)
+    const { contentText, source, pages } = await scrapeWebsite(website.url, periodDays);
 
     // 2. Save new snapshot
     newSnapshot = saveSnapshot(website.id, contentText);
@@ -124,15 +124,32 @@ async function runSingleScan(website, periodDays) {
     // 3. Find baseline snapshot from the specified period
     const oldSnapshot = findBaselineSnapshot(website.id, periodDays);
 
-    // --- First scan: no history ---
+    // --- First scan: no history — run an initial analysis report ---
     if (!oldSnapshot || oldSnapshot.id === newSnapshot.id) {
-      const llm_summary = `This is the first scan for ${website.url}. A baseline snapshot has been recorded. Run the scan again after ${periodDays} day(s) to see changes.`;
+      const llmSummary = await summarizeChanges({
+        websiteUrl: website.url,
+        websiteName: website.name,
+        periodDays,
+        oldContent: '',
+        newContent: contentText,
+        diffText: '',
+        pages,
+        isFirstScan: true,
+      });
+
       const result = db.prepare(
         `INSERT INTO scan_results (website_id, period_days, new_snapshot_id, status, llm_summary)
          VALUES (?, ?, ?, 'no_history', ?)`
-      ).run(website.id, periodDays, newSnapshot.id, llm_summary);
+      ).run(website.id, periodDays, newSnapshot.id, llmSummary);
 
-      return { scanId: result.lastInsertRowid, websiteId: website.id, url: website.url, status: 'no_history', source };
+      return {
+        scanId: result.lastInsertRowid,
+        websiteId: website.id,
+        url: website.url,
+        status: 'no_history',
+        llm_summary: llmSummary,
+        source,
+      };
     }
 
     // 4. Check if content changed
@@ -159,14 +176,19 @@ async function runSingleScan(website, periodDays) {
       };
     }
 
-    // 5. Get LLM summary
+    // 5. Produce structured LLM analysis report
     const llmSummary = await summarizeChanges({
       websiteUrl: website.url,
+      websiteName: website.name,
       periodDays,
       oldContent: oldSnapshot.content_text,
       newContent: contentText,
       diffText,
+      pages,
+      isFirstScan: false,
     });
+
+    const diffSummary = `+${addedLines} lines / -${removedLines} lines`;
 
     // 6. Save completed result
     const result = db.prepare(
@@ -174,7 +196,7 @@ async function runSingleScan(website, periodDays) {
        VALUES (?, ?, ?, ?, ?, ?, 'completed')`
     ).run(
       website.id, periodDays, oldSnapshot.id, newSnapshot.id,
-      `+${addedLines} lines / -${removedLines} lines`,
+      diffSummary,
       llmSummary
     );
 
@@ -183,14 +205,13 @@ async function runSingleScan(website, periodDays) {
       websiteId: website.id,
       url: website.url,
       status: 'completed',
-      llmSummary,
-      diffSummary: `+${addedLines} lines / -${removedLines} lines`,
+      llm_summary: llmSummary,
+      diff_summary: diffSummary,
       source,
     };
   } catch (err) {
     console.error(`Scan failed for ${website.url}:`, err.message);
 
-    // Only write an error record if we at least have a snapshot to reference
     let scanId = null;
     if (newSnapshot) {
       const result = db.prepare(

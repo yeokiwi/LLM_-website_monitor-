@@ -5,22 +5,31 @@
  * Fallback: axios + cheerio  — direct HTML fetch + text extraction
  *
  * BRAVE_API_KEY env var determines which method is used.
+ *
+ * The scraper is period-aware: it adjusts search freshness so recent
+ * content is surfaced first, and runs a dedicated "announcements" search
+ * to capture releases, changelog entries, and blog posts.
  */
 
 const axios = require('axios');
 const cheerio = require('cheerio');
 
 const BRAVE_API_BASE = 'https://api.search.brave.com/res/v1';
-const MAX_CONTENT_CHARS = 12000; // truncate before storing / sending to LLM
+const MAX_CONTENT_CHARS = 14000; // slightly larger to give LLM more context
+
+// Subpaths tried when falling back to direct cheerio scraping
+const SUBPATHS_TO_TRY = ['/blog', '/news', '/changelog', '/releases', '/announcements', '/updates', '/whats-new'];
 
 /**
  * Scrape a website and return structured content.
+ *
  * @param {string} url
+ * @param {number} [periodDays=30] — used to tune search freshness
  * @returns {{ contentText: string, source: 'brave'|'direct', pages: Array }}
  */
-async function scrapeWebsite(url) {
+async function scrapeWebsite(url, periodDays = 30) {
   if (process.env.BRAVE_API_KEY) {
-    return scrapeWithBrave(url);
+    return scrapeWithBrave(url, periodDays);
   }
   return scrapeWithCheerio(url);
 }
@@ -29,14 +38,40 @@ async function scrapeWebsite(url) {
 // Brave Search API
 // ---------------------------------------------------------------------------
 
-async function scrapeWithBrave(url) {
-  const domain = extractDomain(url);
-  const query = `site:${domain}`;
+/**
+ * Maps a monitoring period to a Brave freshness filter.
+ *   pw = past week | pm = past month | py = past year
+ */
+function braveFresnhess(periodDays) {
+  if (periodDays <= 7) return 'pw';
+  if (periodDays <= 31) return 'pm';
+  return 'py';
+}
 
-  // Fetch web search results for the domain
-  const [webResults, newsResults] = await Promise.allSettled([
-    braveFetch('/web/search', { q: query, count: 20, freshness: 'py' }),
-    braveFetch('/news/search', { q: domain, count: 10, freshness: 'py' }),
+async function scrapeWithBrave(url, periodDays) {
+  const domain = extractDomain(url);
+  const freshness = braveFresnhess(periodDays);
+
+  // Three parallel searches:
+  //  1. Indexed pages on the domain (main content snapshot)
+  //  2. News coverage mentioning the domain
+  //  3. Announcement / changelog / release pages within the domain
+  const [webResults, newsResults, announcementResults] = await Promise.allSettled([
+    braveFetch('/web/search', {
+      q: `site:${domain}`,
+      count: 20,
+      freshness,
+    }),
+    braveFetch('/news/search', {
+      q: domain,
+      count: 10,
+      freshness,
+    }),
+    braveFetch('/web/search', {
+      q: `site:${domain} (blog OR changelog OR "release notes" OR announcement OR "what's new" OR news OR updates)`,
+      count: 10,
+      freshness,
+    }),
   ]);
 
   const pages = [];
@@ -67,6 +102,22 @@ async function scrapeWithBrave(url) {
     });
   }
 
+  if (announcementResults.status === 'fulfilled') {
+    const results = announcementResults.value?.web?.results || [];
+    results.forEach((r) => {
+      // Only add if not already present (avoid duplicates)
+      if (!pages.some((p) => p.url === r.url)) {
+        pages.push({
+          type: 'announcement',
+          title: r.title || '',
+          url: r.url || '',
+          description: r.description || '',
+          published: r.page_age || r.age || '',
+        });
+      }
+    });
+  }
+
   const contentText = formatBraveContent(url, domain, pages);
   return { contentText: contentText.slice(0, MAX_CONTENT_CHARS), source: 'brave', pages };
 }
@@ -93,7 +144,7 @@ function formatBraveContent(url, domain, pages) {
     lines.push(`[${i + 1}] ${p.type.toUpperCase()} | ${p.title}`);
     lines.push(`    URL: ${p.url}`);
     if (p.published) lines.push(`    Published: ${p.published}`);
-    if (p.description) lines.push(`    Summary: ${p.description}`);
+    if (p.description) lines.push(`    Excerpt: ${p.description}`);
     lines.push('');
   });
   return lines.join('\n');
@@ -104,57 +155,100 @@ function formatBraveContent(url, domain, pages) {
 // ---------------------------------------------------------------------------
 
 async function scrapeWithCheerio(url) {
-  const response = await axios.get(url, {
-    timeout: 20000,
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (compatible; WebMonitor/1.0; +https://github.com/website-monitor)',
-    },
-    maxRedirects: 5,
-  });
+  // Fetch the main page and try to discover update/blog subpages
+  const [mainPage, ...subPages] = await Promise.allSettled([
+    fetchPage(url),
+    ...SUBPATHS_TO_TRY.slice(0, 4).map((path) => fetchPage(buildSubpageUrl(url, path))),
+  ]);
 
-  const $ = cheerio.load(response.data);
+  const pages = [];
 
-  // Remove noise
-  $('script, style, noscript, svg, iframe, nav, footer, [role="banner"]').remove();
+  if (mainPage.status === 'fulfilled' && mainPage.value) {
+    pages.push({ type: 'page', ...mainPage.value });
+  }
 
-  const title = $('title').text().trim();
-  const metaDesc = $('meta[name="description"]').attr('content') || '';
-
-  // Extract main content
-  const contentSelectors = ['main', 'article', '[role="main"]', '#content', '.content', 'body'];
-  let contentEl = null;
-  for (const sel of contentSelectors) {
-    if ($(sel).length) {
-      contentEl = $(sel).first();
-      break;
+  for (const sp of subPages) {
+    if (sp.status === 'fulfilled' && sp.value) {
+      pages.push({ type: 'subpage', ...sp.value });
     }
   }
 
-  const rawText = contentEl
-    ? contentEl.text()
-    : $('body').text();
+  if (pages.length === 0) {
+    return { contentText: `Failed to fetch content from ${url}`, source: 'direct', pages: [] };
+  }
 
-  const cleanText = rawText
-    .replace(/\s+/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-
-  const contentText = [
-    `Website: ${url}`,
-    `Title: ${title}`,
-    metaDesc ? `Description: ${metaDesc}` : '',
-    '',
-    cleanText,
-  ]
-    .filter(Boolean)
-    .join('\n');
+  const contentText = pages
+    .map((p) => {
+      const lines = [`[${p.type.toUpperCase()}] ${p.title} — ${p.url}`];
+      if (p.description) lines.push(`Description: ${p.description}`);
+      lines.push('', p.bodyText || '');
+      return lines.join('\n');
+    })
+    .join('\n\n---\n\n');
 
   return {
     contentText: contentText.slice(0, MAX_CONTENT_CHARS),
     source: 'direct',
-    pages: [{ type: 'page', title, url, description: metaDesc }],
+    pages: pages.map(({ bodyText: _b, ...rest }) => rest), // strip raw body from page list
   };
+}
+
+/**
+ * Fetch a single URL and extract clean text.
+ * Returns null if the page does not load successfully.
+ */
+async function fetchPage(url) {
+  try {
+    const response = await axios.get(url, {
+      timeout: 12000,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (compatible; WebMonitor/1.0; +https://github.com/website-monitor)',
+      },
+      maxRedirects: 5,
+    });
+
+    if (!response.data || typeof response.data !== 'string') return null;
+
+    const $ = cheerio.load(response.data);
+
+    // Remove noise
+    $('script, style, noscript, svg, iframe, nav, footer, [role="banner"], .cookie-banner, #cookie-consent').remove();
+
+    const title = $('title').text().trim();
+    const metaDesc = $('meta[name="description"]').attr('content') || '';
+
+    // Extract main content area
+    const contentSelectors = ['main', 'article', '[role="main"]', '#content', '.content', '#main', '.main', 'body'];
+    let contentEl = null;
+    for (const sel of contentSelectors) {
+      if ($(sel).length) {
+        contentEl = $(sel).first();
+        break;
+      }
+    }
+
+    const rawText = (contentEl || $('body')).text();
+    const bodyText = rawText
+      .replace(/\t/g, ' ')
+      .replace(/[ ]{3,}/g, '  ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+      .slice(0, 5000);
+
+    return { url, title, description: metaDesc, bodyText };
+  } catch {
+    return null;
+  }
+}
+
+function buildSubpageUrl(baseUrl, path) {
+  try {
+    const { origin } = new URL(baseUrl);
+    return `${origin}${path}`;
+  } catch {
+    return `${baseUrl}${path}`;
+  }
 }
 
 // ---------------------------------------------------------------------------

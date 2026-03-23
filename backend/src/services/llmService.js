@@ -18,73 +18,146 @@
  *   (any other OpenAI-compatible endpoint)
  */
 
-const SYSTEM_PROMPT = `You are a website change analyst. You receive the old and new indexed content \
-of a website, along with a diff summary showing what was added or removed. \
-Your job is to produce a clear, concise summary of what has changed on the website.
+// ---------------------------------------------------------------------------
+// System prompt — structured markdown change report
+// ---------------------------------------------------------------------------
 
-Focus on:
-- New pages, articles, or announcements that appeared
-- Content that was removed or significantly altered
-- Any notable updates (product changes, news, events, pricing, features)
-- Overall tone/direction shifts if apparent
+const SYSTEM_PROMPT = `You are a professional website change analyst. You produce structured markdown \
+change reports for monitored websites.
 
-Be factual and concise. Use bullet points where helpful. \
-If there are no meaningful changes, say so clearly. Do not speculate beyond what the diff shows.`;
+You receive scraped website content — search-indexed pages with titles, URLs, excerpts, and publication \
+dates — along with (when available) a content diff showing exactly what changed since the baseline.
+
+Your output MUST follow this EXACT structure (use ## for each of these six headings):
+
+---
+
+## Executive Summary
+
+2–3 sentences giving an overall picture. Note if source data is sparse.
+
+## What's New or Changed
+
+Bullet list of the most notable changes or additions. Use **bold** for product/feature names. \
+Include dates when available (e.g., "**March 2026** — Feature X launched"). \
+If nothing found: "Nothing detected for this period."
+
+## Announcements & New Releases
+
+Press releases, product launches, version releases, blog posts, or official announcements. \
+Format each as: "- **[Date if known] — [Title]:** description". \
+If nothing found: "Nothing detected for this period."
+
+## Product, Service & Feature Updates
+
+Changes to products, services, pricing, or features. \
+If nothing found: "Nothing detected for this period."
+
+## Policy & Terms Changes
+
+Changes to terms of service, privacy policy, cookie policy, pricing structures, or legal documents. \
+If nothing found: "Nothing detected for this period."
+
+## Confidence Assessment
+
+**Confirmed recent** (explicit dates found within the monitoring period):
+- List items with confirmed dates here, or "None identified."
+
+**Appears recent** (contextually inferred — no explicit date, likely recent based on context or ordering):
+- List items here, or "None identified."
+
+---
+
+RULES:
+- Be factual. Only report what the source data shows. Never invent or speculate.
+- Use clean markdown: bullets with \`-\`, bold with \`**\`, no HTML tags.
+- Use \`##\` for the six main headings above — do not change their wording.
+- Always include dates when they appear in the source material.
+- If a section has nothing to report, write exactly: "Nothing detected for this period."`;
 
 // Default models per provider family
 const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-6';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o';
 
+// Maximum tokens for structured reports
+const MAX_TOKENS = 4096;
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
 /**
+ * Produce a structured markdown change report.
+ *
  * @param {object} params
  * @param {string} params.websiteUrl
+ * @param {string} [params.websiteName]
  * @param {number} params.periodDays
- * @param {string} params.oldContent
- * @param {string} params.newContent
- * @param {string} params.diffText
- * @returns {Promise<string>} LLM summary
+ * @param {string} params.oldContent         — baseline snapshot text (empty string for first scans)
+ * @param {string} params.newContent         — current snapshot text
+ * @param {string} [params.diffText]         — line diff from diffService
+ * @param {Array}  [params.pages]            — structured page list from scraper
+ * @param {boolean} [params.isFirstScan]     — true when no historical baseline exists
+ * @returns {Promise<string>} markdown report
  */
-async function summarizeChanges({ websiteUrl, periodDays, oldContent, newContent, diffText }) {
+async function summarizeChanges({
+  websiteUrl,
+  websiteName,
+  periodDays,
+  oldContent,
+  newContent,
+  diffText,
+  pages,
+  isFirstScan = false,
+}) {
   const provider = (process.env.LLM_PROVIDER || 'claude').toLowerCase();
-  const userMessage = buildUserMessage({ websiteUrl, periodDays, oldContent, newContent, diffText });
+  const userMessage = buildAnalysisMessage({
+    websiteUrl,
+    websiteName,
+    periodDays,
+    oldContent,
+    newContent,
+    diffText,
+    pages,
+    isFirstScan,
+  });
 
   if (provider === 'claude') {
-    return summarizeWithClaude(userMessage);
+    return callClaude(userMessage);
   }
-  return summarizeWithOpenAICompatible(userMessage);
+  return callOpenAICompatible(userMessage);
 }
 
 // ---------------------------------------------------------------------------
 // Claude (Anthropic)
 // ---------------------------------------------------------------------------
 
-async function summarizeWithClaude(userMessage) {
+async function callClaude(userMessage) {
   const Anthropic = require('@anthropic-ai/sdk');
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const model = process.env.LLM_MODEL || DEFAULT_CLAUDE_MODEL;
 
   const message = await client.messages.create({
     model,
-    max_tokens: 1024,
+    max_tokens: MAX_TOKENS,
     system: SYSTEM_PROMPT,
     messages: [{ role: 'user', content: userMessage }],
   });
 
-  return message.content[0]?.text || 'No summary generated.';
+  return message.content[0]?.text || '## Executive Summary\n\nNo analysis generated.';
 }
 
 // ---------------------------------------------------------------------------
 // OpenAI-compatible (OpenAI, Ollama, LM Studio, Groq, Together, Mistral, …)
 // ---------------------------------------------------------------------------
 
-async function summarizeWithOpenAICompatible(userMessage) {
+async function callOpenAICompatible(userMessage) {
   const OpenAI = require('openai');
 
   const clientOptions = {
     apiKey: process.env.OPENAI_API_KEY || 'no-key-required',
   };
 
-  // Allow any OpenAI-compatible base URL
   if (process.env.OPENAI_BASE_URL) {
     clientOptions.baseURL = process.env.OPENAI_BASE_URL;
   }
@@ -94,18 +167,89 @@ async function summarizeWithOpenAICompatible(userMessage) {
 
   const completion = await client.chat.completions.create({
     model,
-    max_tokens: 1024,
+    max_tokens: MAX_TOKENS,
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: userMessage },
     ],
   });
 
-  return completion.choices[0]?.message?.content || 'No summary generated.';
+  return completion.choices[0]?.message?.content || '## Executive Summary\n\nNo analysis generated.';
 }
 
+// ---------------------------------------------------------------------------
+// Helper — build the user message with all available context
+// ---------------------------------------------------------------------------
+
+function buildAnalysisMessage({
+  websiteUrl,
+  websiteName,
+  periodDays,
+  oldContent,
+  newContent,
+  diffText,
+  pages,
+  isFirstScan,
+}) {
+  const today = new Date().toISOString().split('T')[0];
+  const periodStart = new Date(Date.now() - periodDays * 86_400_000).toISOString().split('T')[0];
+  const siteLabel = websiteName ? `${websiteName} (${websiteUrl})` : websiteUrl;
+
+  const parts = [
+    `Website: ${siteLabel}`,
+    `Monitoring period: ${periodStart} to ${today} (last ${periodDays} day${periodDays === 1 ? '' : 's'})`,
+    isFirstScan
+      ? 'Note: This is the FIRST scan. No historical baseline is available for comparison. Analyse the current indexed content to identify what appears to be recent activity within the period.'
+      : '',
+    '',
+  ].filter((l) => l !== undefined);
+
+  // ── Indexed pages (from scraper) ──
+  if (pages && pages.length > 0) {
+    parts.push(`=== INDEXED PAGES & CONTENT (${pages.length} items) ===`);
+    pages.slice(0, 40).forEach((p, i) => {
+      parts.push(`[${i + 1}] ${(p.type || 'PAGE').toUpperCase()} | ${p.title || '(no title)'}`);
+      if (p.url) parts.push(`    URL: ${p.url}`);
+      if (p.published) parts.push(`    Date: ${p.published}`);
+      if (p.description) parts.push(`    Excerpt: ${p.description}`);
+      parts.push('');
+    });
+  }
+
+  // ── Content diff (when available) ──
+  if (diffText && (diffText.includes('+') || diffText.includes('-'))) {
+    parts.push(`=== CONTENT DIFF (lines added/removed since baseline) ===`);
+    parts.push(diffText.slice(0, 6000));
+    parts.push('');
+  }
+
+  // ── Baseline content (comparison anchor) ──
+  if (oldContent && !isFirstScan) {
+    parts.push(`=== BASELINE CONTENT (from ~${periodDays} day${periodDays === 1 ? '' : 's'} ago, first 2500 chars) ===`);
+    parts.push(oldContent.slice(0, 2500));
+    parts.push('');
+  }
+
+  // ── Current content ──
+  parts.push(`=== CURRENT CONTENT (first 2500 chars) ===`);
+  parts.push(newContent.slice(0, 2500));
+  parts.push('');
+
+  parts.push(
+    isFirstScan
+      ? `Please produce a structured markdown change report for this website. Focus on what appears to have happened in the last ${periodDays} day${periodDays === 1 ? '' : 's'} based on the indexed content above.`
+      : `Please produce a structured markdown change report covering what changed on this website over the past ${periodDays} day${periodDays === 1 ? '' : 's'}.`
+  );
+
+  return parts.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Utility
+// ---------------------------------------------------------------------------
+
 /**
- * Return a display string describing the active LLM configuration.
+ * Return a display object describing the active LLM configuration.
  */
 function getLLMInfo() {
   const provider = (process.env.LLM_PROVIDER || 'claude').toLowerCase();
@@ -121,27 +265,6 @@ function getLLMInfo() {
     model: process.env.LLM_MODEL || DEFAULT_OPENAI_MODEL,
     baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
   };
-}
-
-// ---------------------------------------------------------------------------
-// Helper
-// ---------------------------------------------------------------------------
-
-function buildUserMessage({ websiteUrl, periodDays, oldContent, newContent, diffText }) {
-  return [
-    `Website: ${websiteUrl}`,
-    `Monitoring period: last ${periodDays} day(s)`,
-    ``,
-    `=== OLD CONTENT (baseline from ~${periodDays} days ago) ===`,
-    oldContent.slice(0, 4000),
-    ``,
-    `=== NEW CONTENT (current) ===`,
-    newContent.slice(0, 4000),
-    ``,
-    diffText ? diffText : '(No structured diff available)',
-    ``,
-    `Please summarize what has changed on this website over the past ${periodDays} day(s).`,
-  ].join('\n');
 }
 
 module.exports = { summarizeChanges, getLLMInfo };

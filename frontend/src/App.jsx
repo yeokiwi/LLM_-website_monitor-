@@ -3,6 +3,7 @@ import { Routes, Route, NavLink } from 'react-router-dom';
 import Dashboard from './pages/Dashboard';
 import History from './pages/History';
 import LoginPage from './pages/LoginPage';
+import ReportPage from './pages/ReportPage';
 import { getHealth, getMe, storeSession, clearSession, getStoredToken, getStoredUser } from './api/client';
 import styles from './App.module.css';
 
@@ -90,6 +91,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/history" element={<History />} />
+          <Route path="/report/:id" element={<ReportPage />} />
         </Routes>
       </main>
     </div>
