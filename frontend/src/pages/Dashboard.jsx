@@ -4,28 +4,30 @@ import ExcelUpload from '../components/ExcelUpload';
 import WebsiteList from '../components/WebsiteList';
 import PeriodSelector from '../components/PeriodSelector';
 import ScanResultCard from '../components/ScanResultCard';
-import { getWebsites, deleteWebsite, triggerScan } from '../api/client';
+import { getWebsites, deleteWebsite } from '../api/client';
+import { useScan } from '../context/ScanContext';
 import s from './Dashboard.module.css';
 
 export default function Dashboard() {
   const [websites, setWebsites] = useState([]);
   const [selected, setSelected] = useState([]);
-  const [period, setPeriod] = useState(30);
-  const [scanning, setScanning] = useState(false);
-  const [scanResults, setScanResults] = useState([]);
-  const [error, setError] = useState('');
-  // { current: number, total: number, siteName: string } | null
-  const [progress, setProgress] = useState(null);
+  const [period, setPeriod]     = useState(30);
+  const [loadError, setLoadError] = useState('');
+
+  // Scan state lives in ScanContext so it survives navigation away and back
+  const { scanning, progress, scanResults, error: scanError, startScan } = useScan();
 
   const loadWebsites = useCallback(async () => {
     try {
       const data = await getWebsites();
       setWebsites(data);
     } catch {
-      setError('Failed to load websites');
+      setLoadError('Failed to load websites');
     }
   }, []);
 
+  // Re-fetch the list on mount (picks up fresh snapshot counts after returning
+  // from another page mid-scan or after a scan that finished while away)
   useEffect(() => {
     loadWebsites();
   }, [loadWebsites]);
@@ -42,32 +44,10 @@ export default function Dashboard() {
     loadWebsites();
   }
 
-  async function handleScan() {
-    if (selected.length === 0) return;
-    setScanning(true);
-    setScanResults([]);
-    setError('');
-
-    const total = selected.length;
-    const errors = [];
-
-    for (let i = 0; i < total; i++) {
-      const id = selected[i];
-      const site = websites.find((w) => w.id === id);
-      setProgress({ current: i + 1, total, siteName: site?.name || site?.url || String(id) });
-
-      try {
-        const data = await triggerScan([id], period);
-        setScanResults((prev) => [...prev, ...(data.results || [])]);
-      } catch (err) {
-        errors.push(`${site?.url || id}: ${err.response?.data?.error || err.message}`);
-      }
-    }
-
-    setProgress(null);
-    setScanning(false);
-    if (errors.length) setError(errors.join('\n'));
-    loadWebsites();
+  function handleScan() {
+    // startScan is fire-and-forget from Dashboard's perspective; state
+    // is managed in ScanContext and persists across navigation.
+    startScan(selected, period, websites).then(loadWebsites);
   }
 
   return (
@@ -98,6 +78,7 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {/* Per-site progress bar */}
         {progress && (
           <div className={s.progressWrap}>
             <div className={s.progressBar}>
@@ -113,7 +94,9 @@ export default function Dashboard() {
           </div>
         )}
 
-        {error && <p className={s.error}>{error}</p>}
+        {(loadError || scanError) && (
+          <p className={s.error}>{loadError || scanError}</p>
+        )}
 
         <WebsiteList
           websites={websites}
@@ -124,7 +107,7 @@ export default function Dashboard() {
         />
       </section>
 
-      {/* Scan results */}
+      {/* Scan results — accumulate in real-time as each site completes */}
       {scanResults.length > 0 && (
         <section className={s.card}>
           <h2 className={s.sectionTitle}>Scan Results</h2>
