@@ -14,6 +14,8 @@ export default function Dashboard() {
   const [scanning, setScanning] = useState(false);
   const [scanResults, setScanResults] = useState([]);
   const [error, setError] = useState('');
+  // { current: number, total: number, siteName: string } | null
+  const [progress, setProgress] = useState(null);
 
   const loadWebsites = useCallback(async () => {
     try {
@@ -46,16 +48,26 @@ export default function Dashboard() {
     setScanResults([]);
     setError('');
 
-    try {
-      const data = await triggerScan(selected, period);
-      setScanResults(data.results || []);
-      // Refresh snapshot counts after scan
-      loadWebsites();
-    } catch (err) {
-      setError(err.response?.data?.error || 'Scan failed');
-    } finally {
-      setScanning(false);
+    const total = selected.length;
+    const errors = [];
+
+    for (let i = 0; i < total; i++) {
+      const id = selected[i];
+      const site = websites.find((w) => w.id === id);
+      setProgress({ current: i + 1, total, siteName: site?.name || site?.url || String(id) });
+
+      try {
+        const data = await triggerScan([id], period);
+        setScanResults((prev) => [...prev, ...(data.results || [])]);
+      } catch (err) {
+        errors.push(`${site?.url || id}: ${err.response?.data?.error || err.message}`);
+      }
     }
+
+    setProgress(null);
+    setScanning(false);
+    if (errors.length) setError(errors.join('\n'));
+    loadWebsites();
   }
 
   return (
@@ -81,12 +93,25 @@ export default function Dashboard() {
               onClick={handleScan}
               disabled={scanning || selected.length === 0}
             >
-              {scanning
-                ? `Scanning ${selected.length} site(s)…`
-                : `Scan Selected (${selected.length})`}
+              {scanning ? 'Scanning…' : `Scan Selected (${selected.length})`}
             </button>
           </div>
         </div>
+
+        {progress && (
+          <div className={s.progressWrap}>
+            <div className={s.progressBar}>
+              <div
+                className={s.progressFill}
+                style={{ width: `${(progress.current / progress.total) * 100}%` }}
+              />
+            </div>
+            <p className={s.progressLabel}>
+              Scanning <strong>{progress.siteName}</strong>
+              &nbsp;({progress.current} of {progress.total})
+            </p>
+          </div>
+        )}
 
         {error && <p className={s.error}>{error}</p>}
 
