@@ -1,5 +1,12 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import s from './WebsiteList.module.css';
+
+const SORT_KEYS = {
+  name: (w) => (w.name || '').toLowerCase(),
+  url: (w) => (w.url || '').toLowerCase(),
+  snapshot_count: (w) => w.snapshot_count ?? 0,
+  last_scanned_at: (w) => (w.last_scanned_at ? new Date(w.last_scanned_at).getTime() : 0),
+};
 
 export default function WebsiteList({
   websites,
@@ -8,6 +15,37 @@ export default function WebsiteList({
   onSelectAll,
   onDelete,
 }) {
+  const [sortBy, setSortBy] = useState(null);
+  const [sortDir, setSortDir] = useState('asc');
+
+  const sorted = useMemo(() => {
+    if (!sortBy || !SORT_KEYS[sortBy]) return websites;
+    const keyFn = SORT_KEYS[sortBy];
+    const copy = [...websites];
+    copy.sort((a, b) => {
+      const av = keyFn(a);
+      const bv = keyFn(b);
+      if (av < bv) return sortDir === 'asc' ? -1 : 1;
+      if (av > bv) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+    return copy;
+  }, [websites, sortBy, sortDir]);
+
+  function handleSort(key) {
+    if (sortBy === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortBy(key);
+      setSortDir('asc');
+    }
+  }
+
+  function sortIndicator(key) {
+    if (sortBy !== key) return <span className={s.sortIcon}>⇅</span>;
+    return <span className={s.sortIconActive}>{sortDir === 'asc' ? '▲' : '▼'}</span>;
+  }
+
   if (websites.length === 0) {
     return (
       <div className={s.empty}>
@@ -30,15 +68,23 @@ export default function WebsiteList({
                 onChange={() => onSelectAll(allSelected ? [] : websites.map((w) => w.id))}
               />
             </th>
-            <th>Name</th>
-            <th>URL</th>
-            <th>Snapshots</th>
-            <th>Last scanned</th>
+            <th className={s.sortable} onClick={() => handleSort('name')}>
+              Name {sortIndicator('name')}
+            </th>
+            <th className={s.sortable} onClick={() => handleSort('url')}>
+              URL {sortIndicator('url')}
+            </th>
+            <th className={s.sortable} onClick={() => handleSort('snapshot_count')}>
+              Snapshots {sortIndicator('snapshot_count')}
+            </th>
+            <th className={s.sortable} onClick={() => handleSort('last_scanned_at')}>
+              Last scanned {sortIndicator('last_scanned_at')}
+            </th>
             <th></th>
           </tr>
         </thead>
         <tbody>
-          {websites.map((w) => (
+          {sorted.map((w) => (
             <tr key={w.id} className={selected.includes(w.id) ? s.rowSelected : ''}>
               <td className={s.checkCol}>
                 <input

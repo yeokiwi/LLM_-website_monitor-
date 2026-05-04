@@ -13,9 +13,11 @@
 
 const axios = require('axios');
 const cheerio = require('cheerio');
+const pdfParse = require('pdf-parse');
 
 const BRAVE_API_BASE = 'https://api.search.brave.com/res/v1';
 const MAX_CONTENT_CHARS = 14000; // slightly larger to give LLM more context
+const MAX_PDF_BYTES = 25 * 1024 * 1024; // 25 MB cap to avoid huge downloads
 
 // Subpaths tried when falling back to direct cheerio scraping
 const SUBPATHS_TO_TRY = ['/blog', '/news', '/changelog', '/releases', '/announcements', '/updates', '/whats-new'];
@@ -23,15 +25,100 @@ const SUBPATHS_TO_TRY = ['/blog', '/news', '/changelog', '/releases', '/announce
 /**
  * Scrape a website and return structured content.
  *
+ * If the URL points to a PDF, the PDF is downloaded and its text extracted —
+ * search APIs and HTML scraping are bypassed entirely so diffs reflect only
+ * changes within the document itself.
+ *
  * @param {string} url
  * @param {number} [periodDays=30] — used to tune search freshness
- * @returns {{ contentText: string, source: 'brave'|'direct', pages: Array }}
+ * @returns {{ contentText: string, source: 'pdf'|'brave'|'direct', pages: Array }}
  */
 async function scrapeWebsite(url, periodDays = 30) {
+  if (await isPdfUrl(url)) {
+    return scrapePdf(url);
+  }
   if (process.env.BRAVE_API_KEY) {
     return scrapeWithBrave(url, periodDays);
   }
   return scrapeWithCheerio(url);
+}
+
+// ---------------------------------------------------------------------------
+// PDF scraping
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect whether a URL points to a PDF. Checks the URL extension first;
+ * falls back to a HEAD request when the extension is ambiguous.
+ */
+async function isPdfUrl(url) {
+  try {
+    const { pathname } = new URL(url);
+    if (/\.pdf(\?|#|$)/i.test(pathname)) return true;
+  } catch {
+    // fall through to HEAD check
+  }
+
+  try {
+    const head = await axios.head(url, {
+      timeout: 8000,
+      maxRedirects: 5,
+      validateStatus: (s) => s >= 200 && s < 400,
+    });
+    const ct = (head.headers['content-type'] || '').toLowerCase();
+    return ct.includes('application/pdf');
+  } catch {
+    return false;
+  }
+}
+
+async function scrapePdf(url) {
+  const response = await axios.get(url, {
+    responseType: 'arraybuffer',
+    timeout: 30000,
+    maxRedirects: 5,
+    maxContentLength: MAX_PDF_BYTES,
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (compatible; WebMonitor/1.0; +https://github.com/website-monitor)',
+      Accept: 'application/pdf,*/*',
+    },
+  });
+
+  const buffer = Buffer.from(response.data);
+  const parsed = await pdfParse(buffer);
+
+  const rawText = (parsed.text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\t/g, ' ')
+    .replace(/[ ]{3,}/g, '  ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  const info = parsed.info || {};
+  const title = info.Title || '';
+  const author = info.Author || '';
+  const numPages = parsed.numpages || 0;
+
+  const headerLines = [
+    `PDF document: ${url}`,
+    title ? `Title: ${title}` : null,
+    author ? `Author: ${author}` : null,
+    numPages ? `Pages: ${numPages}` : null,
+    '',
+  ].filter((l) => l !== null);
+
+  const contentText = (headerLines.join('\n') + '\n' + rawText).slice(0, MAX_CONTENT_CHARS);
+
+  const pages = [{
+    type: 'pdf',
+    url,
+    title: title || url.split('/').pop() || 'document.pdf',
+    description: author ? `Author: ${author}` : '',
+    numPages,
+  }];
+
+  return { contentText, source: 'pdf', pages };
 }
 
 // ---------------------------------------------------------------------------

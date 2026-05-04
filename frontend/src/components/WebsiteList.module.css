@@ -34,3 +34,7 @@
 }
 .deleteBtn:hover { color: #ef4444; background: #fee2e2; }
 .empty { padding: 40px; text-align: center; color: #9ca3af; font-size: 0.95rem; }
+.sortable { cursor: pointer; user-select: none; }
+.sortable:hover { background: #f3f4f6; }
+.sortIcon { color: #d1d5db; font-size: 0.75rem; margin-left: 4px; }
+.sortIconActive { color: #6366f1; font-size: 0.7rem; margin-left: 4px; }
