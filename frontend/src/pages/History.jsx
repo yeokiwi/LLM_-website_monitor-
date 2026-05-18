@@ -49,6 +49,9 @@ export default function History() {
         const haystack = [
           scan.name,
           scan.url,
+          scan.domain,
+          scan.srms_owner,
+          scan.srms,
           scan.llm_summary,
           scan.diff_summary,
           scan.status,
@@ -66,6 +69,18 @@ export default function History() {
       if (sortBy === 'name') {
         av = (a.name || a.url || '').toLowerCase();
         bv = (b.name || b.url || '').toLowerCase();
+      } else if (sortBy === 'domain') {
+        av = (a.domain || '').toLowerCase();
+        bv = (b.domain || '').toLowerCase();
+      } else if (sortBy === 'owner') {
+        av = (a.srms_owner || '').toLowerCase();
+        bv = (b.srms_owner || '').toLowerCase();
+      } else if (sortBy === 'srms') {
+        av = (a.srms || '').toLowerCase();
+        bv = (b.srms || '').toLowerCase();
+      } else if (sortBy === 'url') {
+        av = (a.url || '').toLowerCase();
+        bv = (b.url || '').toLowerCase();
       } else {
         av = a.scanned_at ? new Date(a.scanned_at).getTime() : 0;
         bv = b.scanned_at ? new Date(b.scanned_at).getTime() : 0;
@@ -108,6 +123,10 @@ export default function History() {
           >
             <option value="date">Date</option>
             <option value="name">Name</option>
+            <option value="domain">Domain</option>
+            <option value="owner">SRMS Owner</option>
+            <option value="srms">SRMS</option>
+            <option value="url">Internet hyperlinks</option>
           </select>
         </label>
         <label className={s.sortLabel}>
@@ -117,8 +136,8 @@ export default function History() {
             value={sortDir}
             onChange={(e) => setSortDir(e.target.value)}
           >
-            <option value="asc">{sortBy === 'name' ? 'A → Z' : 'Oldest first'}</option>
-            <option value="desc">{sortBy === 'name' ? 'Z → A' : 'Newest first'}</option>
+            <option value="asc">{sortBy === 'date' ? 'Oldest first' : 'A → Z'}</option>
+            <option value="desc">{sortBy === 'date' ? 'Newest first' : 'Z → A'}</option>
           </select>
         </label>
       </div>

@@ -38,6 +38,15 @@
 .previewItem:last-child { border-bottom: none; }
 .previewName { min-width: 120px; color: #374151; font-weight: 500; }
 .previewUrl { color: #6b7280; word-break: break-all; }
+.previewMeta {
+  font-size: 0.75rem;
+  color: #475569;
+  background: #eef2ff;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+  align-self: flex-start;
+}
 .more { font-size: 0.8rem; color: #9ca3af; font-style: italic; }
 .actions { display: flex; gap: 8px; }
 .importBtn {

@@ -38,3 +38,11 @@
 .sortable:hover { background: #f3f4f6; }
 .sortIcon { color: #d1d5db; font-size: 0.75rem; margin-left: 4px; }
 .sortIconActive { color: #6366f1; font-size: 0.7rem; margin-left: 4px; }
+.meta { color: #4b5563; white-space: nowrap; }
+.metaWide {
+  color: #4b5563;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

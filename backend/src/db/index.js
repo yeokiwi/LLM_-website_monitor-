@@ -53,4 +53,10 @@ db.exec(`
     ON scan_results(website_id, scanned_at);
 `);
 
+// Additive migrations for SRMS metadata columns. SQLite throws on
+// duplicate ADD COLUMN, so each is wrapped — safe to re-run on existing DBs.
+for (const col of ['domain', 'srms_owner', 'srms']) {
+  try { db.exec(`ALTER TABLE websites ADD COLUMN ${col} TEXT`); } catch { /* already exists */ }
+}
+
 module.exports = db;

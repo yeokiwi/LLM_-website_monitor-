@@ -24,7 +24,7 @@ router.get('/', (req, res) => {
 
 // POST /api/websites — add a single website
 router.post('/', (req, res) => {
-  const { url, name } = req.body;
+  const { url, name, domain, srms_owner, srms } = req.body;
 
   if (!url) {
     return res.status(400).json({ error: 'url is required' });
@@ -39,9 +39,15 @@ router.post('/', (req, res) => {
 
   try {
     const stmt = db.prepare(
-      'INSERT OR IGNORE INTO websites (url, name) VALUES (?, ?)'
+      'INSERT OR IGNORE INTO websites (url, name, domain, srms_owner, srms) VALUES (?, ?, ?, ?, ?)'
     );
-    const result = stmt.run(url.trim(), name?.trim() || null);
+    const result = stmt.run(
+      url.trim(),
+      name?.trim() || null,
+      domain?.trim() || null,
+      srms_owner?.trim() || null,
+      srms?.trim() || null,
+    );
 
     if (result.changes === 0) {
       // URL already exists — fetch and return it
@@ -66,7 +72,9 @@ router.post('/bulk', (req, res) => {
     return res.status(400).json({ error: 'websites array is required' });
   }
 
-  const insert = db.prepare('INSERT OR IGNORE INTO websites (url, name) VALUES (?, ?)');
+  const insert = db.prepare(
+    'INSERT OR IGNORE INTO websites (url, name, domain, srms_owner, srms) VALUES (?, ?, ?, ?, ?)'
+  );
 
   const insertMany = db.transaction((items) => {
     let added = 0;
@@ -79,7 +87,13 @@ router.post('/bulk', (req, res) => {
         skipped++;
         continue;
       }
-      const result = insert.run(item.url.trim(), item.name?.trim() || null);
+      const result = insert.run(
+        item.url.trim(),
+        item.name?.trim() || null,
+        item.domain?.trim?.() || item.domain || null,
+        item.srms_owner?.trim?.() || item.srms_owner || null,
+        item.srms?.trim?.() || item.srms || null,
+      );
       if (result.changes > 0) added++;
       else skipped++;
     }

@@ -17,7 +17,7 @@ router.get('/', (req, res) => {
   const results = db
     .prepare(
       `
-      SELECT sr.*, w.url, w.name
+      SELECT sr.*, w.url, w.name, w.domain, w.srms_owner, w.srms
       FROM scan_results sr
       JOIN websites w ON sr.website_id = w.id
       ORDER BY sr.scanned_at DESC
@@ -40,7 +40,7 @@ router.get('/:id', (req, res) => {
   const scan = db
     .prepare(
       `
-      SELECT sr.*, w.url, w.name
+      SELECT sr.*, w.url, w.name, w.domain, w.srms_owner, w.srms
       FROM scan_results sr
       JOIN websites w ON sr.website_id = w.id
       WHERE sr.id = ?

@@ -4,6 +4,10 @@ import s from './WebsiteList.module.css';
 const SORT_KEYS = {
   name: (w) => (w.name || '').toLowerCase(),
   url: (w) => (w.url || '').toLowerCase(),
+  domain: (w) => (w.domain || '').toLowerCase(),
+  srms_owner: (w) => (w.srms_owner || '').toLowerCase(),
+  srms: (w) => (w.srms || '').toLowerCase(),
+  internet_hyperlinks: (w) => (w.url || '').toLowerCase(),
   snapshot_count: (w) => w.snapshot_count ?? 0,
   last_scanned_at: (w) => (w.last_scanned_at ? new Date(w.last_scanned_at).getTime() : 0),
 };
@@ -74,6 +78,18 @@ export default function WebsiteList({
             <th className={s.sortable} onClick={() => handleSort('url')}>
               URL {sortIndicator('url')}
             </th>
+            <th className={s.sortable} onClick={() => handleSort('domain')}>
+              Domain {sortIndicator('domain')}
+            </th>
+            <th className={s.sortable} onClick={() => handleSort('srms_owner')}>
+              SRMS Owner {sortIndicator('srms_owner')}
+            </th>
+            <th className={s.sortable} onClick={() => handleSort('srms')}>
+              SRMS {sortIndicator('srms')}
+            </th>
+            <th className={s.sortable} onClick={() => handleSort('internet_hyperlinks')}>
+              Internet hyperlinks {sortIndicator('internet_hyperlinks')}
+            </th>
             <th className={s.sortable} onClick={() => handleSort('snapshot_count')}>
               Snapshots {sortIndicator('snapshot_count')}
             </th>
@@ -94,6 +110,16 @@ export default function WebsiteList({
                 />
               </td>
               <td className={s.name}>{w.name || <span className={s.unnamed}>—</span>}</td>
+              <td className={s.url}>
+                <a href={w.url} target="_blank" rel="noopener noreferrer">
+                  {w.url}
+                </a>
+              </td>
+              <td className={s.meta}>{w.domain || <span className={s.unnamed}>—</span>}</td>
+              <td className={s.meta}>{w.srms_owner || <span className={s.unnamed}>—</span>}</td>
+              <td className={s.metaWide} title={w.srms || ''}>
+                {w.srms || <span className={s.unnamed}>—</span>}
+              </td>
               <td className={s.url}>
                 <a href={w.url} target="_blank" rel="noopener noreferrer">
                   {w.url}

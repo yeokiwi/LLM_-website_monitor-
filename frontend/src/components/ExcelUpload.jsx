@@ -58,7 +58,10 @@ export default function ExcelUpload({ onImported }) {
         onChange={handleFile}
         style={{ display: 'none' }}
       />
-      <span className={s.hint}>Expected columns: <strong>URL</strong> (required), <strong>Name</strong> (optional)</span>
+      <span className={s.hint}>
+        Expected columns: <strong>URL</strong> or <strong>Internet hyperlinks</strong> (required);
+        optional: <strong>Name</strong>, <strong>Domain</strong>, <strong>SRMS Owner</strong>, <strong>SRMS</strong>
+      </span>
 
       {error && <p className={s.error}>{error}</p>}
       {success && <p className={s.success}>{success}</p>}
@@ -69,12 +72,22 @@ export default function ExcelUpload({ onImported }) {
             Found <strong>{preview.count}</strong> valid website(s) in the file:
           </p>
           <div className={s.list}>
-            {preview.websites.slice(0, 8).map((w, i) => (
-              <div key={i} className={s.previewItem}>
-                <span className={s.previewName}>{w.name || '—'}</span>
-                <span className={s.previewUrl}>{w.url}</span>
-              </div>
-            ))}
+            {preview.websites.slice(0, 8).map((w, i) => {
+              const tags = [
+                w.domain && `Domain: ${w.domain}`,
+                w.srms_owner && `Owner: ${w.srms_owner}`,
+                w.srms && `SRMS: ${w.srms}`,
+              ].filter(Boolean);
+              return (
+                <div key={i} className={s.previewItem}>
+                  <span className={s.previewName}>{w.name || '—'}</span>
+                  <span className={s.previewUrl}>{w.url}</span>
+                  {tags.length > 0 && (
+                    <span className={s.previewMeta}>{tags.join(' · ')}</span>
+                  )}
+                </div>
+              );
+            })}
             {preview.websites.length > 8 && (
               <p className={s.more}>… and {preview.websites.length - 8} more</p>
             )}

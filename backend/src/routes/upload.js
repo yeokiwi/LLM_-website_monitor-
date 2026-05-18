@@ -51,20 +51,35 @@ router.post('/', upload.single('file'), (req, res) => {
     const firstRow = rows[0];
     const headers = Object.keys(firstRow);
 
-    const urlKey = headers.find((h) => /^url$/i.test(h.trim()));
-    const nameKey = headers.find((h) => /^name$/i.test(h.trim()));
+    const findKey = (pattern) => headers.find((h) => pattern.test(h.trim()));
+    const urlKey    = findKey(/^url$/i) || findKey(/^internet\s*hyperlinks?$/i);
+    const nameKey   = findKey(/^name$/i);
+    const domainKey = findKey(/^domain$/i);
+    const ownerKey  = findKey(/^srms\s*owner$/i);
+    const srmsKey   = findKey(/^srms$/i);
 
     if (!urlKey) {
       return res.status(400).json({
-        error: `Could not find a "URL" column. Found headers: ${headers.join(', ')}`,
+        error: `Could not find a "URL" or "Internet hyperlinks" column. Found headers: ${headers.join(', ')}`,
       });
     }
 
     const websites = rows
-      .map((row) => ({
-        url: String(row[urlKey] || '').trim(),
-        name: nameKey ? String(row[nameKey] || '').trim() : '',
-      }))
+      .map((row) => {
+        const url    = String(row[urlKey]   || '').trim();
+        const name   = nameKey   ? String(row[nameKey]   || '').trim() : '';
+        const domain = domainKey ? String(row[domainKey] || '').trim() : '';
+        const owner  = ownerKey  ? String(row[ownerKey]  || '').trim() : '';
+        const srms   = srmsKey   ? String(row[srmsKey]   || '').trim() : '';
+        return {
+          url,
+          // Fall back to the SRMS title when no Name column is present
+          name: name || srms || '',
+          domain: domain || null,
+          srms_owner: owner || null,
+          srms: srms || null,
+        };
+      })
       .filter((w) => {
         if (!w.url) return false;
         // Basic URL validation

@@ -41,6 +41,19 @@ export default function ScanResultCard({ result }) {
           <div className={s.site}>
             <span className={s.siteName}>{result.name || result.url}</span>
             {result.name && <span className={s.siteUrl}>{result.url}</span>}
+            {(result.domain || result.srms_owner || result.srms) && (
+              <div className={s.meta}>
+                {result.domain && (
+                  <span className={s.metaChip}>Domain: {result.domain}</span>
+                )}
+                {result.srms_owner && (
+                  <span className={s.metaChip}>Owner: {result.srms_owner}</span>
+                )}
+                {result.srms && (
+                  <span className={s.metaChip} title={result.srms}>SRMS: {result.srms}</span>
+                )}
+              </div>
+            )}
           </div>
         </div>
         <div className={s.headerRight}>
