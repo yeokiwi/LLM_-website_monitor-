@@ -11,6 +11,7 @@
   transition: border-color 0.15s;
 }
 .input:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.15); }
+.inputShort { flex: 0 1 160px; min-width: 120px; }
 .btn {
   padding: 9px 20px;
   background: #6366f1;

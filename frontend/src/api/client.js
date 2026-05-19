@@ -50,14 +50,17 @@ export const getMe = () =>
 // ── Websites ──────────────────────────────────────────────────────────────────
 export const getWebsites = () => api.get('/websites').then((r) => r.data);
 
-export const addWebsite = (url, name) =>
-  api.post('/websites', { url, name }).then((r) => r.data);
+export const addWebsite = (url, name, domain, srms_owner) =>
+  api.post('/websites', { url, name, domain, srms_owner }).then((r) => r.data);
 
 export const bulkAddWebsites = (websites) =>
   api.post('/websites/bulk', { websites }).then((r) => r.data);
 
 export const deleteWebsite = (id) =>
   api.delete(`/websites/${id}`).then((r) => r.data);
+
+export const bulkDeleteWebsites = (ids) =>
+  api.post('/websites/bulk-delete', { ids }).then((r) => r.data);
 
 // ── Upload ────────────────────────────────────────────────────────────────────
 export const uploadExcel = (file) => {

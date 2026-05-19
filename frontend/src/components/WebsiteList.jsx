@@ -3,7 +3,6 @@ import s from './WebsiteList.module.css';
 
 const SORT_KEYS = {
   name: (w) => (w.name || '').toLowerCase(),
-  url: (w) => (w.url || '').toLowerCase(),
   domain: (w) => (w.domain || '').toLowerCase(),
   srms_owner: (w) => (w.srms_owner || '').toLowerCase(),
   srms: (w) => (w.srms || '').toLowerCase(),
@@ -75,9 +74,6 @@ export default function WebsiteList({
             <th className={s.sortable} onClick={() => handleSort('name')}>
               Name {sortIndicator('name')}
             </th>
-            <th className={s.sortable} onClick={() => handleSort('url')}>
-              URL {sortIndicator('url')}
-            </th>
             <th className={s.sortable} onClick={() => handleSort('domain')}>
               Domain {sortIndicator('domain')}
             </th>
@@ -110,11 +106,6 @@ export default function WebsiteList({
                 />
               </td>
               <td className={s.name}>{w.name || <span className={s.unnamed}>—</span>}</td>
-              <td className={s.url}>
-                <a href={w.url} target="_blank" rel="noopener noreferrer">
-                  {w.url}
-                </a>
-              </td>
               <td className={s.meta}>{w.domain || <span className={s.unnamed}>—</span>}</td>
               <td className={s.meta}>{w.srms_owner || <span className={s.unnamed}>—</span>}</td>
               <td className={s.metaWide} title={w.srms || ''}>

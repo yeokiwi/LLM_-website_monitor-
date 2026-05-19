@@ -40,6 +40,21 @@
 .scanBtn:hover:not(:disabled) { background: #15803d; }
 .scanBtn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.deleteSelectedBtn {
+  padding: 9px 16px;
+  background: #fff;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+.deleteSelectedBtn:hover:not(:disabled) { background: #fee2e2; border-color: #fca5a5; }
+.deleteSelectedBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+
 .progressWrap {
   display: flex;
   flex-direction: column;

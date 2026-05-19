@@ -4,7 +4,7 @@ import ExcelUpload from '../components/ExcelUpload';
 import WebsiteList from '../components/WebsiteList';
 import PeriodSelector from '../components/PeriodSelector';
 import ScanResultCard from '../components/ScanResultCard';
-import { getWebsites, deleteWebsite } from '../api/client';
+import { getWebsites, deleteWebsite, bulkDeleteWebsites } from '../api/client';
 import { useScan } from '../context/ScanContext';
 import s from './Dashboard.module.css';
 
@@ -44,6 +44,21 @@ export default function Dashboard() {
     loadWebsites();
   }
 
+  async function handleDeleteSelected() {
+    if (selected.length === 0) return;
+    const ok = window.confirm(
+      `Remove ${selected.length} selected website(s)? This will also hide their scan history.`
+    );
+    if (!ok) return;
+    try {
+      await bulkDeleteWebsites(selected);
+      setSelected([]);
+      loadWebsites();
+    } catch (err) {
+      setLoadError(err.response?.data?.error || 'Failed to remove selected websites');
+    }
+  }
+
   function handleScan() {
     // startScan is fire-and-forget from Dashboard's perspective; state
     // is managed in ScanContext and persists across navigation.
@@ -68,6 +83,14 @@ export default function Dashboard() {
           <h2 className={s.sectionTitle}>Monitored Websites ({websites.length})</h2>
           <div className={s.controls}>
             <PeriodSelector value={period} onChange={setPeriod} />
+            <button
+              className={s.deleteSelectedBtn}
+              onClick={handleDeleteSelected}
+              disabled={scanning || selected.length === 0}
+              title="Remove selected websites"
+            >
+              Delete Selected ({selected.length})
+            </button>
             <button
               className={s.scanBtn}
               onClick={handleScan}

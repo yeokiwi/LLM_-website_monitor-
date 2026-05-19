@@ -117,6 +117,20 @@ router.delete('/:id', (req, res) => {
   res.json({ message: 'Website removed' });
 });
 
+// POST /api/websites/bulk-delete — soft-delete many websites at once
+// Body: { ids: number[] }
+router.post('/bulk-delete', (req, res) => {
+  const { ids } = req.body;
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'ids must be a non-empty array' });
+  }
+  const placeholders = ids.map(() => '?').join(',');
+  const result = db
+    .prepare(`UPDATE websites SET is_active = 0 WHERE id IN (${placeholders})`)
+    .run(...ids);
+  res.json({ message: `Removed ${result.changes} website(s)`, removed: result.changes });
+});
+
 // GET /api/websites/:id — get a single website with its recent scans
 router.get('/:id', (req, res) => {
   const website = db
