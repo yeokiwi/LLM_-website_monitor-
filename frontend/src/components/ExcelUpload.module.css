@@ -27,6 +27,7 @@
   gap: 12px;
 }
 .previewTitle { font-size: 0.9rem; }
+.skipNote { color: #b45309; font-size: 0.82rem; }
 .list { display: flex; flex-direction: column; gap: 6px; }
 .previewItem {
   display: flex;

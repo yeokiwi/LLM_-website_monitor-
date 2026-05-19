@@ -69,7 +69,15 @@ export default function ExcelUpload({ onImported }) {
       {preview && (
         <div className={s.preview}>
           <p className={s.previewTitle}>
-            Found <strong>{preview.count}</strong> valid website(s) in the file:
+            Found <strong>{preview.count}</strong> valid website(s) in the file
+            {preview.sheets > 1 && ` across ${preview.sheets} sheets`}
+            {preview.skipped > 0 && (
+              <span className={s.skipNote}>
+                {' '}— skipped {preview.skipped} row(s)
+                {preview.skippedNoUrl > 0 && ` (${preview.skippedNoUrl} with no Internet hyperlink)`}
+              </span>
+            )}
+            :
           </p>
           <div className={s.list}>
             {preview.websites.slice(0, 8).map((w, i) => {
