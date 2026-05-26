@@ -1,13 +1,17 @@
 /**
  * Scraper service
  *
- * Primary:  Brave Search API  — uses indexed, clean page content/snippets
- * Fallback: axios + cheerio  — direct HTML fetch + text extraction
+ * Three methods for capturing a site's content for change detection:
+ *   brave   — Brave Search API   (indexed, clean page content/snippets)
+ *   searxng — a SearXNG instance (JSON metasearch results)
+ *   direct  — axios + cheerio    (direct HTML fetch + text extraction)
  *
- * BRAVE_API_KEY env var determines which method is used.
+ * SEARCH_PROVIDER env var selects the method explicitly; if unset it is
+ * inferred for backward compatibility (brave if BRAVE_API_KEY is set, else
+ * searxng if SEARXNG_URL is set, otherwise direct).
  *
- * The scraper is period-aware: it adjusts search freshness so recent
- * content is surfaced first, and runs a dedicated "announcements" search
+ * The search-based methods are period-aware: they adjust freshness so recent
+ * content is surfaced first, and run a dedicated "announcements" search
  * to capture releases, changelog entries, and blog posts.
  */
 
@@ -31,16 +35,38 @@ const SUBPATHS_TO_TRY = ['/blog', '/news', '/changelog', '/releases', '/announce
  *
  * @param {string} url
  * @param {number} [periodDays=30] — used to tune search freshness
- * @returns {{ contentText: string, source: 'pdf'|'brave'|'direct', pages: Array }}
+ * @returns {{ contentText: string, source: 'pdf'|'brave'|'searxng'|'direct', pages: Array }}
  */
 async function scrapeWebsite(url, periodDays = 30) {
   if (await isPdfUrl(url)) {
     return scrapePdf(url);
   }
-  if (process.env.BRAVE_API_KEY) {
-    return scrapeWithBrave(url, periodDays);
+  switch (resolveSearchProvider()) {
+    case 'brave':
+      return scrapeWithBrave(url, periodDays);
+    case 'searxng':
+      return scrapeWithSearxng(url, periodDays);
+    default:
+      return scrapeWithCheerio(url);
   }
-  return scrapeWithCheerio(url);
+}
+
+/**
+ * Resolve the effective search provider. Validates that the config required by
+ * an explicitly selected provider is present — falling back to 'direct' when it
+ * is missing — so health checks and logs report the method actually in use.
+ *
+ * @returns {'brave'|'searxng'|'direct'}
+ */
+function resolveSearchProvider() {
+  const explicit = (process.env.SEARCH_PROVIDER || '').toLowerCase().trim();
+  if (explicit === 'searxng') return process.env.SEARXNG_URL ? 'searxng' : 'direct';
+  if (explicit === 'brave') return process.env.BRAVE_API_KEY ? 'brave' : 'direct';
+  if (explicit === 'direct') return 'direct';
+  // No explicit selection → infer for backward compatibility
+  if (process.env.BRAVE_API_KEY) return 'brave';
+  if (process.env.SEARXNG_URL) return 'searxng';
+  return 'direct';
 }
 
 // ---------------------------------------------------------------------------
@@ -205,7 +231,7 @@ async function scrapeWithBrave(url, periodDays) {
     });
   }
 
-  const contentText = formatBraveContent(url, domain, pages);
+  const contentText = formatIndexedContent(url, domain, pages);
   return { contentText: contentText.slice(0, MAX_CONTENT_CHARS), source: 'brave', pages };
 }
 
@@ -222,7 +248,7 @@ async function braveFetch(endpoint, params) {
   return response.data;
 }
 
-function formatBraveContent(url, domain, pages) {
+function formatIndexedContent(url, domain, pages) {
   if (pages.length === 0) {
     return `No indexed content found for ${url}`;
   }
@@ -235,6 +261,98 @@ function formatBraveContent(url, domain, pages) {
     lines.push('');
   });
   return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// SearXNG (self-hosted / metasearch JSON API)
+// ---------------------------------------------------------------------------
+
+/**
+ * Maps a monitoring period to a SearXNG time_range filter.
+ *   week | month | year
+ */
+function searxngTimeRange(periodDays) {
+  if (periodDays <= 7) return 'week';
+  if (periodDays <= 31) return 'month';
+  return 'year';
+}
+
+async function scrapeWithSearxng(url, periodDays) {
+  const domain = extractDomain(url);
+  const timeRange = searxngTimeRange(periodDays);
+
+  // Three parallel searches mirroring the Brave strategy:
+  //  1. Indexed pages on the domain (main content snapshot)
+  //  2. News coverage mentioning the domain
+  //  3. Announcement / changelog / release pages within the domain
+  const [webResults, newsResults, announcementResults] = await Promise.allSettled([
+    searxngFetch(`site:${domain}`, { categories: 'general', timeRange }),
+    searxngFetch(domain, { categories: 'news', timeRange }),
+    searxngFetch(
+      `site:${domain} (blog OR changelog OR "release notes" OR announcement OR "what's new" OR news OR updates)`,
+      { categories: 'general', timeRange }
+    ),
+  ]);
+
+  const pages = [];
+
+  if (webResults.status === 'fulfilled') {
+    (webResults.value?.results || []).forEach((r) => {
+      pages.push({
+        type: 'web',
+        title: r.title || '',
+        url: r.url || '',
+        description: r.content || '',
+        published: r.publishedDate || '',
+      });
+    });
+  }
+
+  if (newsResults.status === 'fulfilled') {
+    (newsResults.value?.results || []).forEach((r) => {
+      pages.push({
+        type: 'news',
+        title: r.title || '',
+        url: r.url || '',
+        description: r.content || '',
+        published: r.publishedDate || '',
+      });
+    });
+  }
+
+  if (announcementResults.status === 'fulfilled') {
+    (announcementResults.value?.results || []).forEach((r) => {
+      // Only add if not already present (avoid duplicates)
+      if (!pages.some((p) => p.url === r.url)) {
+        pages.push({
+          type: 'announcement',
+          title: r.title || '',
+          url: r.url || '',
+          description: r.content || '',
+          published: r.publishedDate || '',
+        });
+      }
+    });
+  }
+
+  const contentText = formatIndexedContent(url, domain, pages);
+  return { contentText: contentText.slice(0, MAX_CONTENT_CHARS), source: 'searxng', pages };
+}
+
+async function searxngFetch(query, { categories, timeRange }) {
+  const base = process.env.SEARXNG_URL.replace(/\/+$/, '');
+  const response = await axios.get(`${base}/search`, {
+    headers: { Accept: 'application/json' },
+    params: {
+      q: query,
+      format: 'json',
+      categories,
+      time_range: timeRange,
+      language: 'en',
+    },
+    timeout: 15000,
+  });
+  return response.data;
 }
 
 // ---------------------------------------------------------------------------
@@ -350,4 +468,11 @@ function extractDomain(url) {
   }
 }
 
-module.exports = { scrapeWebsite, extractDomain };
+/**
+ * Return the search/scraping method currently in effect: 'brave', 'searxng', or 'direct'.
+ */
+function getScraperMethod() {
+  return resolveSearchProvider();
+}
+
+module.exports = { scrapeWebsite, extractDomain, getScraperMethod };

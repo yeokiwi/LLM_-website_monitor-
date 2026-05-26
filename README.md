@@ -48,7 +48,7 @@ Website Monitor lets you track what changes on any website over time without man
 
 - **Manual or bulk website entry** — add sites one by one, or upload an Excel/CSV file containing a list of URLs
 - **Flexible time periods** — 30 days, 60 days, 90 days, or any custom number of days
-- **Brave Search API integration** — uses Brave's indexed, clean page content for change detection (direct HTTP scraping fallback when no Brave key is configured)
+- **Pluggable search providers** — use the **Brave Search API** or a self-hosted **SearXNG** instance for clean, indexed page content (with a direct HTTP scraping fallback); selectable via `SEARCH_PROVIDER`
 - **Any OpenAI-compatible LLM** — works with Claude, OpenAI, Ollama, LM Studio, Groq, Together AI, Mistral AI, DeepSeek, Perplexity, and any other endpoint that speaks the OpenAI chat completions API; configured entirely via environment variables
 - **Persistent snapshot storage** — every scan stores a content snapshot in SQLite so future scans always have a baseline to compare against
 - **Intelligent scan statuses** — skips LLM calls when content is unchanged; handles first-time scans gracefully
@@ -63,7 +63,7 @@ Add websites  →  Choose period  →  Trigger scan
                                         │
                           ┌─────────────▼──────────────┐
                           │  1. Fetch current content   │
-                          │     (Brave API or direct)   │
+                          │  (Brave / SearXNG / direct) │
                           │  2. Store new snapshot      │
                           │  3. Find baseline snapshot  │
                           │     from N days ago         │
@@ -87,7 +87,7 @@ Add websites  →  Choose period  →  Trigger scan
 | Backend runtime | Node.js 18+ |
 | Backend framework | Express 4 |
 | Database | SQLite via `better-sqlite3` (no server required) |
-| Web scraping | Brave Search API (primary) · axios + cheerio (fallback) |
+| Web scraping | Brave Search API or SearXNG (primary) · axios + cheerio (fallback) |
 | Excel / CSV parsing | SheetJS (`xlsx`) |
 | File upload | multer |
 | Text diffing | `diff` (line-level) |
@@ -116,7 +116,7 @@ Add websites  →  Choose period  →  Trigger scan
 │       │   ├── scans.js        ← scan orchestration & results
 │       │   └── upload.js       ← Excel / CSV upload endpoint
 │       └── services/
-│           ├── scraper.js      ← Brave API + axios/cheerio fallback
+│           ├── scraper.js      ← Brave / SearXNG + axios/cheerio fallback
 │           ├── snapshotService.js  ← save / retrieve snapshots
 │           ├── diffService.js      ← compute line diff
 │           └── llmService.js       ← Claude / any OpenAI-compatible endpoint
@@ -149,7 +149,7 @@ Add websites  →  Choose period  →  Trigger scan
 | Node.js | 18 or later | https://nodejs.org |
 | npm | 8 or later | bundled with Node.js |
 | LLM API key | — | One of: Anthropic, OpenAI, Groq, Together AI, Mistral, etc. — or none for local models (Ollama/LM Studio) |
-| Brave Search API key | — | Optional but recommended — https://api.search.brave.com |
+| Search provider | — | Optional but recommended — a Brave Search API key (https://api.search.brave.com) **or** a SearXNG instance URL |
 
 ---
 
@@ -234,13 +234,22 @@ OPENAI_API_KEY=...
 OPENAI_BASE_URL=https://api.deepseek.com/v1
 ```
 
-Add your Brave Search API key (recommended) and leave the SQLite path as-is:
+Choose a search provider (recommended) and leave the SQLite path as-is. Either set a Brave key:
 ```dotenv
+SEARCH_PROVIDER=brave
 BRAVE_API_KEY=BSA...
 DB_PATH=./data/monitor.db
 ```
+…or point at a SearXNG instance instead:
+```dotenv
+SEARCH_PROVIDER=searxng
+SEARXNG_URL=https://searxng.example.com
+DB_PATH=./data/monitor.db
+```
 
-> **Tip:** If `BRAVE_API_KEY` is not set, the app falls back to fetching pages directly with HTTP. Some sites may block automated requests in this mode.
+> **Tip:** `SEARCH_PROVIDER` is optional — if omitted, the app auto-detects (Brave if `BRAVE_API_KEY` is set, else SearXNG if `SEARXNG_URL` is set). If neither is configured, it falls back to fetching pages directly with HTTP; some sites may block automated requests in this mode.
+>
+> **SearXNG note:** the instance must have JSON output enabled — its `settings.yml` `search.formats` must include `json`.
 
 ### 3. Install dependencies
 
@@ -311,6 +320,7 @@ docker run -p 3001:3001 \
   -e JWT_SECRET=your-random-secret \
   -e LLM_PROVIDER=claude \
   -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e SEARCH_PROVIDER=brave \
   -e BRAVE_API_KEY=BSA... \
   website-monitor
 ```
@@ -361,7 +371,9 @@ In your Railway service go to **Variables** and add:
 | `ANTHROPIC_API_KEY` | `sk-ant-...` *(if using Claude)* |
 | `OPENAI_API_KEY` | `sk-...` *(if using an OpenAI-compatible provider)* |
 | `OPENAI_BASE_URL` | *(if using a non-OpenAI endpoint)* |
-| `BRAVE_API_KEY` | `BSA...` *(recommended)* |
+| `SEARCH_PROVIDER` | `brave` *(or `searxng` / `direct`; optional — auto-detects)* |
+| `BRAVE_API_KEY` | `BSA...` *(if using Brave)* |
+| `SEARXNG_URL` | `https://searxng.example.com` *(if using SearXNG)* |
 | `DB_PATH` | `/data/monitor.db` |
 
 > `PORT` is set automatically by Railway — do not add it manually.
@@ -395,7 +407,9 @@ All variables are set in `backend/.env`.
 | `ANTHROPIC_API_KEY` | — | When `LLM_PROVIDER=claude` | API key from https://console.anthropic.com |
 | `OPENAI_API_KEY` | — | For hosted services | API key. Set to any non-empty string for local models that don't require auth |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | No | Base URL for the OpenAI-compatible endpoint (see provider table below) |
-| `BRAVE_API_KEY` | — | Recommended | API key from https://api.search.brave.com |
+| `SEARCH_PROVIDER` | *(auto)* | No | `brave`, `searxng`, or `direct`. If unset, auto-detects: `brave` when `BRAVE_API_KEY` is set, else `searxng` when `SEARXNG_URL` is set, otherwise `direct` |
+| `BRAVE_API_KEY` | — | When provider is `brave` | API key from https://api.search.brave.com |
+| `SEARXNG_URL` | — | When provider is `searxng` | Base URL of a SearXNG instance with JSON output enabled (`search.formats` must include `json`). Basic-auth creds may be embedded in the URL |
 | `DB_PATH` | `./data/monitor.db` | No | Path to the SQLite database file |
 
 > **Generate a secure `JWT_SECRET`:**
@@ -534,7 +548,7 @@ Ensure `backend/.env` exists and `LLM_PROVIDER=claude` with a valid `ANTHROPIC_A
 Double-check that `OPENAI_API_KEY` contains the correct API key for that provider, and that `OPENAI_BASE_URL` matches the provider's documented base URL exactly (no trailing slash).
 
 **Scans return `status: error` with a network message**
-- The target website may be blocking automated requests. Try enabling the Brave Search API (`BRAVE_API_KEY`) which uses Brave's indexed content rather than direct HTTP fetches.
+- The target website may be blocking automated requests. Try a search-based provider — set `SEARCH_PROVIDER=brave` with a `BRAVE_API_KEY`, or `SEARCH_PROVIDER=searxng` with a `SEARXNG_URL` — which uses indexed content rather than direct HTTP fetches.
 - Check that the URL includes the `https://` prefix and is publicly accessible.
 
 **Frontend shows "Failed to load websites"**
