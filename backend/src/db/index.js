@@ -59,4 +59,16 @@ for (const col of ['domain', 'srms_owner', 'srms']) {
   try { db.exec(`ALTER TABLE websites ADD COLUMN ${col} TEXT`); } catch { /* already exists */ }
 }
 
+// Per-website scraper selection flags. Default both engines on.
+for (const col of ['use_firecrawl', 'use_brave']) {
+  try { db.exec(`ALTER TABLE websites ADD COLUMN ${col} INTEGER DEFAULT 1`); } catch { /* already exists */ }
+}
+
+// Provider-scoped snapshots so each engine diffs against its own history.
+try { db.exec(`ALTER TABLE snapshots ADD COLUMN provider TEXT DEFAULT 'default'`); } catch { /* already exists */ }
+try {
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_snapshots_website_provider_scraped
+             ON snapshots(website_id, provider, scraped_at)`);
+} catch { /* already exists */ }
+
 module.exports = db;

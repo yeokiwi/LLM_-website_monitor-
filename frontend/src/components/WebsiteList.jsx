@@ -17,6 +17,7 @@ export default function WebsiteList({
   onToggle,
   onSelectAll,
   onDelete,
+  onToggleScraper,
 }) {
   const [sortBy, setSortBy] = useState(null);
   const [sortDir, setSortDir] = useState('asc');
@@ -86,6 +87,7 @@ export default function WebsiteList({
             <th className={s.sortable} onClick={() => handleSort('internet_hyperlinks')}>
               Internet hyperlinks {sortIndicator('internet_hyperlinks')}
             </th>
+            <th className={s.scraperHead}>Scrape with</th>
             <th className={s.sortable} onClick={() => handleSort('snapshot_count')}>
               Snapshots {sortIndicator('snapshot_count')}
             </th>
@@ -115,6 +117,24 @@ export default function WebsiteList({
                 <a href={w.url} target="_blank" rel="noopener noreferrer">
                   {w.url}
                 </a>
+              </td>
+              <td className={s.scraperCell}>
+                <label className={s.scraperOption}>
+                  <input
+                    type="checkbox"
+                    checked={!!w.use_firecrawl}
+                    onChange={(e) => onToggleScraper?.(w.id, 'use_firecrawl', e.target.checked)}
+                  />
+                  Firecrawl
+                </label>
+                <label className={s.scraperOption}>
+                  <input
+                    type="checkbox"
+                    checked={!!w.use_brave}
+                    onChange={(e) => onToggleScraper?.(w.id, 'use_brave', e.target.checked)}
+                  />
+                  Brave
+                </label>
               </td>
               <td className={s.center}>{w.snapshot_count ?? 0}</td>
               <td className={s.date}>

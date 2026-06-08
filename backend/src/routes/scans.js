@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { scrapeWebsite } = require('../services/scraper');
+const { scrapeWebsite, scrapeWithProvider, isPdfUrl } = require('../services/scraper');
 const { saveSnapshot, findBaselineSnapshot, getSnapshot } = require('../services/snapshotService');
 const { computeDiff } = require('../services/diffService');
 const { summarizeChanges } = require('../services/llmService');
@@ -110,21 +110,184 @@ router.post('/', async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // Core scan logic for a single website
+//
+// Each website can opt into one or more scraper engines (Firecrawl / Brave).
+// Every selected engine is scraped independently and diffed against its own
+// provider-scoped history; the per-engine analyses are combined into a single
+// report with one top-level "# <Engine> Results" section per engine.
 // ---------------------------------------------------------------------------
+
+const PROVIDER_SECTION_LABELS = {
+  firecrawl: 'Firecrawl Results',
+  brave: 'Brave Search Results',
+  direct: 'Direct Scrape Results',
+};
+
+const PROVIDER_SHORT_LABELS = {
+  firecrawl: 'Firecrawl',
+  brave: 'Brave',
+  direct: 'Direct',
+};
+
+/**
+ * Scrape, snapshot, diff and summarise a single website with one engine.
+ * @returns {{ status, markdown, newSnapshotId, oldSnapshotId, diffSummary }}
+ */
+async function scanOneProvider(website, periodDays, provider) {
+  const { contentText, pages } = await scrapeWithProvider(provider, website.url, periodDays);
+
+  const snap = saveSnapshot(website.id, contentText, provider);
+  const baseline = findBaselineSnapshot(website.id, periodDays, provider);
+
+  // First scan for this engine — no history yet.
+  if (!baseline || baseline.id === snap.id) {
+    const md = await summarizeChanges({
+      websiteUrl: website.url,
+      websiteName: website.name,
+      periodDays,
+      oldContent: '',
+      newContent: contentText,
+      diffText: '',
+      pages,
+      isFirstScan: true,
+    });
+    return { status: 'no_history', markdown: md, newSnapshotId: snap.id, oldSnapshotId: null, diffSummary: null };
+  }
+
+  const { diffText, hasChanges, addedLines, removedLines } = computeDiff(
+    baseline.content_text,
+    contentText
+  );
+
+  if (!hasChanges) {
+    return {
+      status: 'no_changes',
+      markdown: `No changes detected over the past ${periodDays} day(s).`,
+      newSnapshotId: snap.id,
+      oldSnapshotId: baseline.id,
+      diffSummary: null,
+    };
+  }
+
+  const md = await summarizeChanges({
+    websiteUrl: website.url,
+    websiteName: website.name,
+    periodDays,
+    oldContent: baseline.content_text,
+    newContent: contentText,
+    diffText,
+    pages,
+    isFirstScan: false,
+  });
+
+  return {
+    status: 'completed',
+    markdown: md,
+    newSnapshotId: snap.id,
+    oldSnapshotId: baseline.id,
+    diffSummary: `+${addedLines}/-${removedLines}`,
+  };
+}
+
 async function runSingleScan(website, periodDays) {
+  // PDFs bypass the search/scrape engines entirely — keep the legacy single flow.
+  let pdf = false;
+  try { pdf = await isPdfUrl(website.url); } catch { /* treat as non-PDF */ }
+  if (pdf) {
+    return runLegacyScan(website, periodDays);
+  }
+
+  // Build the list of engines this website opted into, gated by configured keys.
+  const providers = [];
+  if (website.use_firecrawl && process.env.FIRECRAWL_API_KEY) providers.push('firecrawl');
+  if (website.use_brave && process.env.BRAVE_API_KEY) providers.push('brave');
+
+  // No engine selected/available → fall back to a single direct scrape (legacy).
+  const usingFallback = providers.length === 0;
+  if (usingFallback) providers.push('direct');
+
+  const sections = [];
+  const statuses = [];
+  const diffParts = [];
+  let primaryNewSnapshotId = null;
+  let primaryOldSnapshotId = null;
+  let lastError = null;
+
+  for (const provider of providers) {
+    let body;
+    let status;
+    try {
+      const r = await scanOneProvider(website, periodDays, provider);
+      body = r.markdown;
+      status = r.status;
+      if (primaryNewSnapshotId === null) {
+        primaryNewSnapshotId = r.newSnapshotId;
+        primaryOldSnapshotId = r.oldSnapshotId;
+      }
+      if (r.diffSummary) diffParts.push(`${PROVIDER_SHORT_LABELS[provider]}: ${r.diffSummary}`);
+    } catch (err) {
+      console.error(`Scan failed for ${website.url} [${provider}]:`, err.message);
+      body = `**Error:** ${err.message}`;
+      status = 'error';
+      lastError = err;
+    }
+    statuses.push(status);
+    sections.push(usingFallback ? body : `# ${PROVIDER_SECTION_LABELS[provider]}\n\n${body}`);
+  }
+
+  const combined = sections.join('\n\n');
+
+  // Aggregate the per-engine outcomes into one row-level status.
+  let status;
+  if (statuses.includes('completed')) status = 'completed';
+  else if (statuses.includes('no_history')) status = 'no_history';
+  else if (statuses.every((st) => st === 'no_changes')) status = 'no_changes';
+  else status = 'error';
+
+  // Every engine failed before saving a snapshot — mirror the legacy behaviour
+  // (no row inserted because new_snapshot_id is NOT NULL).
+  if (primaryNewSnapshotId === null) {
+    return {
+      scanId: null,
+      websiteId: website.id,
+      url: website.url,
+      status: 'error',
+      error: lastError ? lastError.message : 'Scan failed',
+    };
+  }
+
+  const diffSummary = diffParts.length ? diffParts.join(' · ') : null;
+
+  const result = db.prepare(
+    `INSERT INTO scan_results (website_id, period_days, old_snapshot_id, new_snapshot_id, diff_summary, llm_summary, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(website.id, periodDays, primaryOldSnapshotId, primaryNewSnapshotId, diffSummary, combined, status);
+
+  return {
+    scanId: result.lastInsertRowid,
+    websiteId: website.id,
+    url: website.url,
+    status,
+    llm_summary: combined,
+    diff_summary: diffSummary,
+    source: providers.join('+'),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Legacy single-provider scan — used for PDFs (auto-resolved engine, default
+// snapshot scope). Preserves the original behaviour for documents.
+// ---------------------------------------------------------------------------
+async function runLegacyScan(website, periodDays) {
   let newSnapshot = null;
 
   try {
-    // 1. Scrape current content (period-aware for freshness tuning)
     const { contentText, source, pages } = await scrapeWebsite(website.url, periodDays);
 
-    // 2. Save new snapshot
     newSnapshot = saveSnapshot(website.id, contentText);
 
-    // 3. Find baseline snapshot from the specified period
     const oldSnapshot = findBaselineSnapshot(website.id, periodDays);
 
-    // --- First scan: no history — run an initial analysis report ---
     if (!oldSnapshot || oldSnapshot.id === newSnapshot.id) {
       const llmSummary = await summarizeChanges({
         websiteUrl: website.url,
@@ -152,7 +315,6 @@ async function runSingleScan(website, periodDays) {
       };
     }
 
-    // 4. Check if content changed
     const { diffText, hasChanges, addedLines, removedLines } = computeDiff(
       oldSnapshot.content_text,
       contentText
@@ -176,7 +338,6 @@ async function runSingleScan(website, periodDays) {
       };
     }
 
-    // 5. Produce structured LLM analysis report
     const llmSummary = await summarizeChanges({
       websiteUrl: website.url,
       websiteName: website.name,
@@ -190,7 +351,6 @@ async function runSingleScan(website, periodDays) {
 
     const diffSummary = `+${addedLines} lines / -${removedLines} lines`;
 
-    // 6. Save completed result
     const result = db.prepare(
       `INSERT INTO scan_results (website_id, period_days, old_snapshot_id, new_snapshot_id, diff_summary, llm_summary, status)
        VALUES (?, ?, ?, ?, ?, ?, 'completed')`

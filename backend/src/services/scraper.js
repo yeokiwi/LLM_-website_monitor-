@@ -85,6 +85,21 @@ function resolveScraperProvider() {
   return 'direct';
 }
 
+/**
+ * Scrape with an explicitly named provider (bypasses auto-resolution).
+ * Used when a website opts into specific engines (Firecrawl and/or Brave).
+ *
+ * @param {'firecrawl'|'brave'|'direct'} provider
+ * @param {string} url
+ * @param {number} [periodDays=30]
+ * @returns {{ contentText: string, source: string, pages: Array }}
+ */
+async function scrapeWithProvider(provider, url, periodDays = 30) {
+  if (provider === 'firecrawl') return scrapeWithFirecrawl(url);
+  if (provider === 'brave') return scrapeWithBrave(url, periodDays);
+  return scrapeWithCheerio(url);
+}
+
 // ---------------------------------------------------------------------------
 // PDF scraping
 // ---------------------------------------------------------------------------
@@ -450,4 +465,4 @@ function extractDomain(url) {
   }
 }
 
-module.exports = { scrapeWebsite, extractDomain, resolveScraperProvider };
+module.exports = { scrapeWebsite, scrapeWithProvider, isPdfUrl, extractDomain, resolveScraperProvider };

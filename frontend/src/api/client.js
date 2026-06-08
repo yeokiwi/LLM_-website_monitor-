@@ -56,6 +56,9 @@ export const addWebsite = (url, name, domain, srms_owner) =>
 export const bulkAddWebsites = (websites) =>
   api.post('/websites/bulk', { websites }).then((r) => r.data);
 
+export const updateWebsite = (id, fields) =>
+  api.patch(`/websites/${id}`, fields).then((r) => r.data);
+
 export const deleteWebsite = (id) =>
   api.delete(`/websites/${id}`).then((r) => r.data);
 

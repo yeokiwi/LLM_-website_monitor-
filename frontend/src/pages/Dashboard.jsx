@@ -4,7 +4,7 @@ import ExcelUpload from '../components/ExcelUpload';
 import WebsiteList from '../components/WebsiteList';
 import PeriodSelector from '../components/PeriodSelector';
 import ScanResultCard from '../components/ScanResultCard';
-import { getWebsites, deleteWebsite, bulkDeleteWebsites } from '../api/client';
+import { getWebsites, deleteWebsite, bulkDeleteWebsites, updateWebsite } from '../api/client';
 import { useScan } from '../context/ScanContext';
 import s from './Dashboard.module.css';
 
@@ -36,6 +36,17 @@ export default function Dashboard() {
     setSelected((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
+  }
+
+  async function handleToggleScraper(id, field, value) {
+    const next = value ? 1 : 0;
+    // Optimistic update; revert from server if the request fails.
+    setWebsites((prev) => prev.map((w) => (w.id === id ? { ...w, [field]: next } : w)));
+    try {
+      await updateWebsite(id, { [field]: next });
+    } catch {
+      loadWebsites();
+    }
   }
 
   async function handleDelete(id) {
@@ -127,6 +138,7 @@ export default function Dashboard() {
           onToggle={handleToggle}
           onSelectAll={setSelected}
           onDelete={handleDelete}
+          onToggleScraper={handleToggleScraper}
         />
       </section>
 

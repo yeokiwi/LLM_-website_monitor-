@@ -104,6 +104,40 @@ router.post('/bulk', (req, res) => {
   res.json({ message: `Imported ${stats.added} website(s), skipped ${stats.skipped}`, ...stats });
 });
 
+// PATCH /api/websites/:id — update per-website scraper engine flags
+// Body: { use_firecrawl?: 0|1|boolean, use_brave?: 0|1|boolean }
+router.patch('/:id', (req, res) => {
+  const { id } = req.params;
+  const { use_firecrawl, use_brave } = req.body;
+
+  const updates = [];
+  const values = [];
+  if (use_firecrawl !== undefined) {
+    updates.push('use_firecrawl = ?');
+    values.push(use_firecrawl ? 1 : 0);
+  }
+  if (use_brave !== undefined) {
+    updates.push('use_brave = ?');
+    values.push(use_brave ? 1 : 0);
+  }
+
+  if (updates.length === 0) {
+    return res.status(400).json({ error: 'No updatable fields provided' });
+  }
+
+  values.push(id);
+  const result = db
+    .prepare(`UPDATE websites SET ${updates.join(', ')} WHERE id = ?`)
+    .run(...values);
+
+  if (result.changes === 0) {
+    return res.status(404).json({ error: 'Website not found' });
+  }
+
+  const website = db.prepare('SELECT * FROM websites WHERE id = ?').get(id);
+  res.json(website);
+});
+
 // DELETE /api/websites/:id — soft-delete (deactivate) a website
 router.delete('/:id', (req, res) => {
   const { id } = req.params;
