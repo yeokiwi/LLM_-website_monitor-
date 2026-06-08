@@ -1,12 +1,16 @@
 /**
  * Scraper service
  *
- * Primary:  Brave Search API  — uses indexed, clean page content/snippets
- * Fallback: axios + cheerio  — direct HTML fetch + text extraction
+ * Options:
+ *   Firecrawl   — full-page clean markdown via the Firecrawl API (best diffs)
+ *   Brave       — Brave Search API indexed, clean page content/snippets
+ *   Direct      — axios + cheerio direct HTML fetch + text extraction (fallback)
  *
- * BRAVE_API_KEY env var determines which method is used.
+ * The SCRAPER_PROVIDER env var (brave | firecrawl | auto) selects the method;
+ * `auto` (the default) uses whichever provider's API key is configured. See
+ * resolveScraperProvider() for the precedence rules.
  *
- * The scraper is period-aware: it adjusts search freshness so recent
+ * The Brave path is period-aware: it adjusts search freshness so recent
  * content is surfaced first, and runs a dedicated "announcements" search
  * to capture releases, changelog entries, and blog posts.
  */
@@ -16,6 +20,7 @@ const cheerio = require('cheerio');
 const pdfParse = require('pdf-parse');
 
 const BRAVE_API_BASE = 'https://api.search.brave.com/res/v1';
+const FIRECRAWL_API_BASE = process.env.FIRECRAWL_BASE_URL || 'https://api.firecrawl.dev/v1';
 const MAX_CONTENT_CHARS = 14000; // slightly larger to give LLM more context
 const MAX_PDF_BYTES = 25 * 1024 * 1024; // 25 MB cap to avoid huge downloads
 
@@ -31,16 +36,53 @@ const SUBPATHS_TO_TRY = ['/blog', '/news', '/changelog', '/releases', '/announce
  *
  * @param {string} url
  * @param {number} [periodDays=30] — used to tune search freshness
- * @returns {{ contentText: string, source: 'pdf'|'brave'|'direct', pages: Array }}
+ * @returns {{ contentText: string, source: 'pdf'|'firecrawl'|'brave'|'direct', pages: Array }}
  */
 async function scrapeWebsite(url, periodDays = 30) {
   if (await isPdfUrl(url)) {
     return scrapePdf(url);
   }
-  if (process.env.BRAVE_API_KEY) {
+
+  const provider = resolveScraperProvider();
+  if (provider === 'firecrawl') {
+    return scrapeWithFirecrawl(url);
+  }
+  if (provider === 'brave') {
     return scrapeWithBrave(url, periodDays);
   }
   return scrapeWithCheerio(url);
+}
+
+/**
+ * Resolve which scraping backend to use based on SCRAPER_PROVIDER and which
+ * API keys are configured. Returns 'firecrawl' | 'brave' | 'direct'.
+ *
+ * Precedence:
+ *   - SCRAPER_PROVIDER=firecrawl → firecrawl if FIRECRAWL_API_KEY set, else auto
+ *   - SCRAPER_PROVIDER=brave     → brave if BRAVE_API_KEY set, else auto
+ *   - auto (default/unset)       → firecrawl if FIRECRAWL_API_KEY, else brave if
+ *                                  BRAVE_API_KEY, else direct
+ *
+ * In `auto`, Firecrawl is preferred over Brave because full-page content yields
+ * richer change detection than Brave's snippets.
+ */
+function resolveScraperProvider() {
+  const hasFirecrawl = !!process.env.FIRECRAWL_API_KEY;
+  const hasBrave = !!process.env.BRAVE_API_KEY;
+  const preference = (process.env.SCRAPER_PROVIDER || 'auto').toLowerCase();
+
+  if (preference === 'firecrawl') {
+    if (hasFirecrawl) return 'firecrawl';
+    console.warn('SCRAPER_PROVIDER=firecrawl but FIRECRAWL_API_KEY is not set — falling back to auto selection.');
+  } else if (preference === 'brave') {
+    if (hasBrave) return 'brave';
+    console.warn('SCRAPER_PROVIDER=brave but BRAVE_API_KEY is not set — falling back to auto selection.');
+  }
+
+  // auto (and the fall-through cases above)
+  if (hasFirecrawl) return 'firecrawl';
+  if (hasBrave) return 'brave';
+  return 'direct';
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +280,64 @@ function formatBraveContent(url, domain, pages) {
 }
 
 // ---------------------------------------------------------------------------
+// Firecrawl API
+// ---------------------------------------------------------------------------
+
+/**
+ * Scrape a single page with Firecrawl, returning its clean full-page markdown.
+ * Unlike Brave (which returns indexed snippets), this captures the actual
+ * rendered page content, producing far richer diffs.
+ */
+async function scrapeWithFirecrawl(url) {
+  const domain = extractDomain(url);
+
+  const resp = await axios.post(
+    `${FIRECRAWL_API_BASE}/scrape`,
+    { url, formats: ['markdown'], onlyMainContent: true },
+    {
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${process.env.FIRECRAWL_API_KEY}`,
+      },
+      timeout: 60000, // Firecrawl renders JS; allow a generous timeout
+    }
+  );
+
+  const data = resp.data?.data || {};
+  const md = data.markdown || '';
+  const meta = data.metadata || {};
+  const title = meta.title || '';
+  const description = meta.description || '';
+
+  if (!md) {
+    return {
+      contentText: `No content returned by Firecrawl for ${url}`,
+      source: 'firecrawl',
+      pages: [],
+    };
+  }
+
+  const header = [
+    `Website: ${url}`,
+    `Domain: ${domain}`,
+    title ? `Title: ${title}` : null,
+    description ? `Description: ${description}` : null,
+    '',
+  ].filter((l) => l !== null).join('\n');
+
+  const contentText = (header + '\n' + md).slice(0, MAX_CONTENT_CHARS);
+
+  const pages = [{
+    type: 'page',
+    url,
+    title: title || url,
+    description,
+  }];
+
+  return { contentText, source: 'firecrawl', pages };
+}
+
+// ---------------------------------------------------------------------------
 // Direct fetch fallback (axios + cheerio)
 // ---------------------------------------------------------------------------
 
@@ -350,4 +450,4 @@ function extractDomain(url) {
   }
 }
 
-module.exports = { scrapeWebsite, extractDomain };
+module.exports = { scrapeWebsite, extractDomain, resolveScraperProvider };
