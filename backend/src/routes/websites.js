@@ -104,11 +104,11 @@ router.post('/bulk', (req, res) => {
   res.json({ message: `Imported ${stats.added} website(s), skipped ${stats.skipped}`, ...stats });
 });
 
-// PATCH /api/websites/:id — update per-website scraper engine flags
-// Body: { use_firecrawl?: 0|1|boolean, use_brave?: 0|1|boolean }
+// PATCH /api/websites/:id — update per-website scraper flags and/or remark
+// Body: { use_firecrawl?: 0|1|boolean, use_brave?: 0|1|boolean, remark?: string }
 router.patch('/:id', (req, res) => {
   const { id } = req.params;
-  const { use_firecrawl, use_brave } = req.body;
+  const { use_firecrawl, use_brave, remark } = req.body;
 
   const updates = [];
   const values = [];
@@ -119,6 +119,10 @@ router.patch('/:id', (req, res) => {
   if (use_brave !== undefined) {
     updates.push('use_brave = ?');
     values.push(use_brave ? 1 : 0);
+  }
+  if (remark !== undefined) {
+    updates.push('remark = ?');
+    values.push(remark === null ? null : String(remark));
   }
 
   if (updates.length === 0) {

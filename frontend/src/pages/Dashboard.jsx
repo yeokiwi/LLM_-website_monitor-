@@ -49,6 +49,15 @@ export default function Dashboard() {
     }
   }
 
+  async function handleSaveRemark(id, remark) {
+    setWebsites((prev) => prev.map((w) => (w.id === id ? { ...w, remark } : w)));
+    try {
+      await updateWebsite(id, { remark });
+    } catch {
+      loadWebsites();
+    }
+  }
+
   async function handleDelete(id) {
     await deleteWebsite(id);
     setSelected((prev) => prev.filter((x) => x !== id));
@@ -139,6 +148,7 @@ export default function Dashboard() {
           onSelectAll={setSelected}
           onDelete={handleDelete}
           onToggleScraper={handleToggleScraper}
+          onSaveRemark={handleSaveRemark}
         />
       </section>
 

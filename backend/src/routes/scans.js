@@ -71,6 +71,28 @@ router.get('/website/:websiteId', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// PATCH /api/scans/:id — save a user remark/comment on a scan result
+// Body: { remark: string }
+// ---------------------------------------------------------------------------
+router.patch('/:id', (req, res) => {
+  const { remark } = req.body;
+  if (remark === undefined) {
+    return res.status(400).json({ error: 'remark is required' });
+  }
+
+  const result = db
+    .prepare('UPDATE scan_results SET remark = ? WHERE id = ?')
+    .run(remark === null ? null : String(remark), req.params.id);
+
+  if (result.changes === 0) {
+    return res.status(404).json({ error: 'Scan not found' });
+  }
+
+  const scan = db.prepare('SELECT * FROM scan_results WHERE id = ?').get(req.params.id);
+  res.json(scan);
+});
+
+// ---------------------------------------------------------------------------
 // POST /api/scans — trigger a scan
 // Body: { websiteIds: number[], periodDays: number }
 // ---------------------------------------------------------------------------

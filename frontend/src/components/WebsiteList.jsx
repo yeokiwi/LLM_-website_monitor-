@@ -1,5 +1,39 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import s from './WebsiteList.module.css';
+
+/** Inline-editable remark cell — saves on blur (or Enter) when changed. */
+function RemarkCell({ website, onSaveRemark }) {
+  const [value, setValue] = useState(website.remark || '');
+  const [saving, setSaving] = useState(false);
+
+  // Sync if the row's remark changes from outside (e.g. after a reload)
+  useEffect(() => {
+    setValue(website.remark || '');
+  }, [website.remark]);
+
+  async function commit() {
+    if (value === (website.remark || '')) return;
+    setSaving(true);
+    try {
+      await onSaveRemark?.(website.id, value);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <input
+      type="text"
+      className={s.remarkInput}
+      value={value}
+      placeholder="Add remark…"
+      disabled={saving}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+    />
+  );
+}
 
 const SORT_KEYS = {
   name: (w) => (w.name || '').toLowerCase(),
@@ -18,6 +52,7 @@ export default function WebsiteList({
   onSelectAll,
   onDelete,
   onToggleScraper,
+  onSaveRemark,
 }) {
   const [sortBy, setSortBy] = useState(null);
   const [sortDir, setSortDir] = useState('asc');
@@ -94,6 +129,7 @@ export default function WebsiteList({
             <th className={s.sortable} onClick={() => handleSort('last_scanned_at')}>
               Last scanned {sortIndicator('last_scanned_at')}
             </th>
+            <th className={s.remarkHead}>Remark</th>
             <th></th>
           </tr>
         </thead>
@@ -141,6 +177,9 @@ export default function WebsiteList({
                 {w.last_scanned_at
                   ? new Date(w.last_scanned_at).toLocaleString()
                   : <span className={s.never}>Never</span>}
+              </td>
+              <td className={s.remarkCell}>
+                <RemarkCell website={w} onSaveRemark={onSaveRemark} />
               </td>
               <td className={s.actions}>
                 <button

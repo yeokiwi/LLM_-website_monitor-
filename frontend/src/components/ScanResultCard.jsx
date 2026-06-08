@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { stripMarkdown, isMarkdownReport } from '../pages/ReportPage';
+import { updateScanRemark } from '../api/client';
 import s from './ScanResultCard.module.css';
 
 const STATUS_LABELS = {
@@ -23,6 +24,27 @@ export default function ScanResultCard({ result }) {
 
   // Scan ID — from DB it's `id`, from live POST response it's `scanId`
   const scanId = result.id || result.scanId;
+
+  // ── Per-scan remark / comment ──
+  const [remark, setRemark] = useState(result.remark || '');
+  const [savedRemark, setSavedRemark] = useState(result.remark || '');
+  const [savingRemark, setSavingRemark] = useState(false);
+  const [remarkSaved, setRemarkSaved] = useState(false);
+
+  async function handleSaveRemark() {
+    if (!scanId) return;
+    setSavingRemark(true);
+    setRemarkSaved(false);
+    try {
+      await updateScanRemark(scanId, remark);
+      setSavedRemark(remark);
+      setRemarkSaved(true);
+    } catch {
+      /* leave the text in place so the user can retry */
+    } finally {
+      setSavingRemark(false);
+    }
+  }
   const hasReport = !!summary;
   const hasMarkdown = isMarkdownReport(summary);
 
@@ -108,6 +130,30 @@ export default function ScanResultCard({ result }) {
               <strong>Error:</strong> {result.error_message}
             </div>
           )}
+        </div>
+      )}
+
+      {scanId && (
+        <div className={s.remark}>
+          <label className={s.remarkLabel}>Remark</label>
+          <textarea
+            className={s.remarkInput}
+            value={remark}
+            placeholder="Add a comment about this scan…"
+            rows={2}
+            disabled={savingRemark}
+            onChange={(e) => { setRemark(e.target.value); setRemarkSaved(false); }}
+          />
+          <div className={s.remarkActions}>
+            <button
+              className={s.remarkSaveBtn}
+              onClick={handleSaveRemark}
+              disabled={savingRemark || remark === savedRemark}
+            >
+              {savingRemark ? 'Saving…' : 'Save remark'}
+            </button>
+            {remarkSaved && <span className={s.remarkSavedMsg}>✓ Saved</span>}
+          </div>
         </div>
       )}
     </div>

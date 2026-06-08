@@ -103,3 +103,54 @@
   font-size: 0.88rem;
   color: #b91c1c;
 }
+
+/* Per-scan remark / comment box */
+.remark {
+  padding: 12px 18px 16px;
+  border-top: 1px solid #f3f4f6;
+  background: #fcfcfd;
+}
+.remarkLabel {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #6b7280;
+  margin-bottom: 6px;
+}
+.remarkInput {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 0.88rem;
+  color: #374151;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  resize: vertical;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.remarkInput::placeholder { color: #9ca3af; }
+.remarkInput:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+.remarkInput:disabled { background: #f3f4f6; cursor: wait; }
+.remarkActions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.remarkSaveBtn {
+  background: #6366f1;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.remarkSaveBtn:hover:not(:disabled) { background: #4f46e5; }
+.remarkSaveBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.remarkSavedMsg { font-size: 0.8rem; color: #16a34a; font-weight: 600; }

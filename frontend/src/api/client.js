@@ -84,6 +84,9 @@ export const getScans = (limit = 20, offset = 0) =>
 export const getScan = (id) =>
   api.get(`/scans/${id}`).then((r) => r.data);
 
+export const updateScanRemark = (id, remark) =>
+  api.patch(`/scans/${id}`, { remark }).then((r) => r.data);
+
 export const getWebsiteScans = (websiteId) =>
   api.get(`/scans/website/${websiteId}`).then((r) => r.data);
 
