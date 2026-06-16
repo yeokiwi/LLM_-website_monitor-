@@ -17,6 +17,7 @@
 
 const axios = require('axios');
 const cheerio = require('cheerio');
+const crypto = require('crypto');
 const pdfParse = require('pdf-parse');
 
 const BRAVE_API_BASE = 'https://api.search.brave.com/res/v1';
@@ -143,19 +144,31 @@ async function scrapePdf(url) {
   });
 
   const buffer = Buffer.from(response.data);
-  const parsed = await pdfParse(buffer);
 
-  const rawText = (parsed.text || '')
-    .replace(/\r\n/g, '\n')
-    .replace(/\t/g, ' ')
-    .replace(/[ ]{3,}/g, '  ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  // Attempt text extraction, but never let a parse failure (encrypted,
+  // image-only or malformed PDFs) abort the scan — a snapshot must always be
+  // produced so changes can still be detected on the next scan.
+  let rawText = '';
+  let info = {};
+  let numPages = 0;
+  let parseError = null;
+  try {
+    const parsed = await pdfParse(buffer);
+    rawText = (parsed.text || '')
+      .replace(/\r\n/g, '\n')
+      .replace(/\t/g, ' ')
+      .replace(/[ ]{3,}/g, '  ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    info = parsed.info || {};
+    numPages = parsed.numpages || 0;
+  } catch (err) {
+    parseError = err.message;
+    console.warn(`PDF text extraction failed for ${url}: ${err.message}`);
+  }
 
-  const info = parsed.info || {};
   const title = info.Title || '';
   const author = info.Author || '';
-  const numPages = parsed.numpages || 0;
 
   const headerLines = [
     `PDF document: ${url}`,
@@ -165,7 +178,23 @@ async function scrapePdf(url) {
     '',
   ].filter((l) => l !== null);
 
-  const contentText = (headerLines.join('\n') + '\n' + rawText).slice(0, MAX_CONTENT_CHARS);
+  // Body: extracted text when available, otherwise a byte-level fingerprint so
+  // diffs between scans still flag when the underlying file changes.
+  let body;
+  if (rawText) {
+    body = rawText;
+  } else {
+    const fingerprint = crypto.createHash('sha256').update(buffer).digest('hex');
+    body = [
+      parseError
+        ? `[PDF text could not be extracted: ${parseError}]`
+        : '[PDF contained no extractable text]',
+      `Bytes: ${buffer.length}`,
+      `Content fingerprint: ${fingerprint}`,
+    ].join('\n');
+  }
+
+  const contentText = (headerLines.join('\n') + '\n' + body).slice(0, MAX_CONTENT_CHARS);
 
   const pages = [{
     type: 'pdf',
@@ -465,4 +494,4 @@ function extractDomain(url) {
   }
 }
 
-module.exports = { scrapeWebsite, scrapeWithProvider, isPdfUrl, extractDomain, resolveScraperProvider };
+module.exports = { scrapeWebsite, scrapeWithProvider, scrapePdf, isPdfUrl, extractDomain, resolveScraperProvider };

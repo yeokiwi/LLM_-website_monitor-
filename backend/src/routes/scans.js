@@ -1,6 +1,6 @@
 const express = require('express');
 const db = require('../db');
-const { scrapeWebsite, scrapeWithProvider, isPdfUrl } = require('../services/scraper');
+const { scrapeWebsite, scrapeWithProvider, scrapePdf, isPdfUrl } = require('../services/scraper');
 const { saveSnapshot, findBaselineSnapshot, getPreviousSnapshot, getSnapshot } = require('../services/snapshotService');
 const { computeDiff } = require('../services/diffService');
 const { summarizeChanges } = require('../services/llmService');
@@ -306,7 +306,8 @@ async function runPdfScan(website, periodDays) {
   let newSnapshot = null;
 
   try {
-    const { contentText, source, pages } = await scrapeWebsite(website.url, periodDays);
+    // Scrape the PDF document directly (no redundant content-type re-detection).
+    const { contentText, source, pages } = await scrapePdf(website.url);
 
     newSnapshot = saveSnapshot(website.id, contentText, 'pdf');
 
