@@ -1,0 +1,18 @@
+.wrap { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn {
+  padding: 9px 16px;
+  background: #fff;
+  border: 1px dashed #6366f1;
+  border-radius: 8px;
+  color: #6366f1;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn:hover:not(:disabled) { background: #eef2ff; }
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.hint { font-size: 0.78rem; color: #6b7280; }
+.error { color: #ef4444; font-size: 0.85rem; }
+.success { color: #16a34a; font-size: 0.85rem; }

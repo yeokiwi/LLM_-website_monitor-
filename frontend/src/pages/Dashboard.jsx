@@ -4,7 +4,8 @@ import ExcelUpload from '../components/ExcelUpload';
 import WebsiteList from '../components/WebsiteList';
 import PeriodSelector from '../components/PeriodSelector';
 import ScanResultCard from '../components/ScanResultCard';
-import { getWebsites, deleteWebsite, bulkDeleteWebsites, updateWebsite } from '../api/client';
+import DataBackup from '../components/DataBackup';
+import { getWebsites, deleteWebsite, bulkDeleteWebsites, updateWebsite, bulkUpdateWebsites } from '../api/client';
 import { useScan } from '../context/ScanContext';
 import s from './Dashboard.module.css';
 
@@ -44,6 +45,18 @@ export default function Dashboard() {
     setWebsites((prev) => prev.map((w) => (w.id === id ? { ...w, [field]: next } : w)));
     try {
       await updateWebsite(id, { [field]: next });
+    } catch {
+      loadWebsites();
+    }
+  }
+
+  async function handleToggleScraperAll(field, value) {
+    const next = value ? 1 : 0;
+    const ids = websites.map((w) => w.id);
+    // Optimistic update for every row; revert from server on failure.
+    setWebsites((prev) => prev.map((w) => ({ ...w, [field]: next })));
+    try {
+      await bulkUpdateWebsites(ids, { [field]: next });
     } catch {
       loadWebsites();
     }
@@ -95,6 +108,7 @@ export default function Dashboard() {
         </div>
         <div className={s.divider}>or</div>
         <ExcelUpload onImported={loadWebsites} />
+        <DataBackup onImported={loadWebsites} />
       </section>
 
       {/* Website list + scan controls */}
@@ -148,6 +162,7 @@ export default function Dashboard() {
           onSelectAll={setSelected}
           onDelete={handleDelete}
           onToggleScraper={handleToggleScraper}
+          onToggleScraperAll={handleToggleScraperAll}
           onSaveRemark={handleSaveRemark}
         />
       </section>

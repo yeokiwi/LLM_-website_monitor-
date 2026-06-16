@@ -1,7 +1,11 @@
 const express = require('express');
+const XLSX = require('xlsx');
 const db = require('../db');
 
 const router = express.Router();
+
+// Per-website scraper flag columns that bulk-update accepts.
+const SCRAPER_FLAGS = ['use_firecrawl', 'use_brave', 'use_serper'];
 
 // GET /api/websites — list all active websites
 router.get('/', (req, res) => {
@@ -171,6 +175,77 @@ router.post('/bulk-delete', (req, res) => {
     .prepare(`UPDATE websites SET is_active = 0 WHERE id IN (${placeholders})`)
     .run(...ids);
   res.json({ message: `Removed ${result.changes} website(s)`, removed: result.changes });
+});
+
+// POST /api/websites/bulk-update — apply scraper flag(s) to many websites
+// Body: { ids?: number[], updates: { use_firecrawl?, use_brave?, use_serper? } }
+// When `ids` is omitted/empty the update applies to all active websites.
+router.post('/bulk-update', (req, res) => {
+  const { ids, updates } = req.body;
+
+  if (!updates || typeof updates !== 'object') {
+    return res.status(400).json({ error: 'updates object is required' });
+  }
+
+  const setClauses = [];
+  const values = [];
+  for (const flag of SCRAPER_FLAGS) {
+    if (updates[flag] !== undefined) {
+      setClauses.push(`${flag} = ?`);
+      values.push(updates[flag] ? 1 : 0);
+    }
+  }
+
+  if (setClauses.length === 0) {
+    return res.status(400).json({ error: 'No updatable fields provided' });
+  }
+
+  let where = 'is_active = 1';
+  if (Array.isArray(ids) && ids.length > 0) {
+    where = `id IN (${ids.map(() => '?').join(',')})`;
+    values.push(...ids);
+  }
+
+  const result = db
+    .prepare(`UPDATE websites SET ${setClauses.join(', ')} WHERE ${where}`)
+    .run(...values);
+
+  res.json({ updated: result.changes });
+});
+
+// GET /api/websites/export — download all active websites as an .xlsx
+// Columns round-trip with the Excel importer (POST /api/upload).
+router.get('/export', (req, res) => {
+  const websites = db
+    .prepare(
+      `SELECT url, name, domain, srms_owner, srms, use_firecrawl, use_brave, use_serper
+       FROM websites WHERE is_active = 1 ORDER BY created_at DESC`
+    )
+    .all();
+
+  const rows = websites.map((w) => ({
+    'Internet hyperlinks': w.url,
+    Name: w.name || '',
+    Domain: w.domain || '',
+    'SRMS Owner': w.srms_owner || '',
+    SRMS: w.srms || '',
+    use_firecrawl: w.use_firecrawl ? 1 : 0,
+    use_brave: w.use_brave ? 1 : 0,
+    use_serper: w.use_serper ? 1 : 0,
+  }));
+
+  const worksheet = XLSX.utils.json_to_sheet(rows);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Websites');
+  const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+
+  const filename = `websites-${new Date().toISOString().slice(0, 10)}.xlsx`;
+  res.setHeader(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  );
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(buffer);
 });
 
 // GET /api/websites/:id — get a single website with its recent scans

@@ -39,6 +39,9 @@
 .sortIcon { color: #d1d5db; font-size: 0.75rem; margin-left: 4px; }
 .sortIconActive { color: #6366f1; font-size: 0.7rem; margin-left: 4px; }
 .scraperHead { white-space: nowrap; }
+.scraperHeadTitle { display: block; margin-bottom: 4px; }
+.scraperHeadGroup { display: flex; gap: 2px; flex-direction: column; }
+.scraperHeadGroup .scraperOption { font-weight: 400; color: #4b5563; margin-right: 0; }
 .scraperCell { white-space: nowrap; }
 .scraperOption {
   display: inline-flex;

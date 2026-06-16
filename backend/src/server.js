@@ -10,6 +10,7 @@ require('./db');
 const websitesRouter = require('./routes/websites');
 const scansRouter = require('./routes/scans');
 const uploadRouter = require('./routes/upload');
+const databaseRouter = require('./routes/database');
 const authRouter = require('./routes/auth');
 const { requireAuth } = require('./middleware/auth');
 const { getLLMInfo } = require('./services/llmService');
@@ -49,6 +50,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/websites', requireAuth, websitesRouter);
 app.use('/api/scans',    requireAuth, scansRouter);
 app.use('/api/upload',   requireAuth, uploadRouter);
+app.use('/api/database', requireAuth, databaseRouter);
 
 // Website-specific scans shortcut
 app.use('/api/websites/:websiteId/scans', requireAuth, (req, res, next) => {

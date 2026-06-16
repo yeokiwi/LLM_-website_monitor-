@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import s from './WebsiteList.module.css';
 
 /** Inline-editable remark cell — saves on blur (or Enter) when changed. */
@@ -35,6 +35,31 @@ function RemarkCell({ website, onSaveRemark }) {
   );
 }
 
+/** Header "select all" checkbox for one scraper provider column. */
+function ScraperAllCheckbox({ label, field, websites, onToggleScraperAll }) {
+  const ref = useRef(null);
+  const total = websites.length;
+  const on = websites.filter((w) => !!w[field]).length;
+  const allOn = total > 0 && on === total;
+
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = on > 0 && on < total;
+  }, [on, total]);
+
+  return (
+    <label className={s.scraperOption}>
+      <input
+        ref={ref}
+        type="checkbox"
+        checked={allOn}
+        disabled={total === 0}
+        onChange={(e) => onToggleScraperAll?.(field, e.target.checked)}
+      />
+      {label}
+    </label>
+  );
+}
+
 const SORT_KEYS = {
   name: (w) => (w.name || '').toLowerCase(),
   domain: (w) => (w.domain || '').toLowerCase(),
@@ -52,6 +77,7 @@ export default function WebsiteList({
   onSelectAll,
   onDelete,
   onToggleScraper,
+  onToggleScraperAll,
   onSaveRemark,
 }) {
   const [sortBy, setSortBy] = useState(null);
@@ -122,7 +148,29 @@ export default function WebsiteList({
             <th className={s.sortable} onClick={() => handleSort('internet_hyperlinks')}>
               Internet hyperlinks {sortIndicator('internet_hyperlinks')}
             </th>
-            <th className={s.scraperHead}>Scrape with</th>
+            <th className={s.scraperHead}>
+              <span className={s.scraperHeadTitle}>Scrape with</span>
+              <div className={s.scraperHeadGroup}>
+                <ScraperAllCheckbox
+                  label="Firecrawl"
+                  field="use_firecrawl"
+                  websites={websites}
+                  onToggleScraperAll={onToggleScraperAll}
+                />
+                <ScraperAllCheckbox
+                  label="Brave"
+                  field="use_brave"
+                  websites={websites}
+                  onToggleScraperAll={onToggleScraperAll}
+                />
+                <ScraperAllCheckbox
+                  label="Serper"
+                  field="use_serper"
+                  websites={websites}
+                  onToggleScraperAll={onToggleScraperAll}
+                />
+              </div>
+            </th>
             <th className={s.sortable} onClick={() => handleSort('snapshot_count')}>
               Snapshots {sortIndicator('snapshot_count')}
             </th>

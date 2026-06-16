@@ -75,3 +75,5 @@ try {
 } catch { /* already exists */ }
 
 module.exports = db;
+module.exports.dbPath = dbPath;
+module.exports.Database = Database;
