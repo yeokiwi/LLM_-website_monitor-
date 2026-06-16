@@ -1,7 +1,7 @@
 const express = require('express');
 const db = require('../db');
 const { scrapeWebsite, scrapeWithProvider, isPdfUrl } = require('../services/scraper');
-const { saveSnapshot, findBaselineSnapshot, getSnapshot } = require('../services/snapshotService');
+const { saveSnapshot, findBaselineSnapshot, getPreviousSnapshot, getSnapshot } = require('../services/snapshotService');
 const { computeDiff } = require('../services/diffService');
 const { summarizeChanges } = require('../services/llmService');
 
@@ -212,11 +212,12 @@ async function scanOneProvider(website, periodDays, provider) {
 }
 
 async function runSingleScan(website, periodDays) {
-  // PDFs bypass the search/scrape engines entirely — keep the legacy single flow.
+  // PDFs are scanned as documents only (search/scrape engines bypassed) and
+  // diffed against the previous scan rather than the period baseline.
   let pdf = false;
   try { pdf = await isPdfUrl(website.url); } catch { /* treat as non-PDF */ }
   if (pdf) {
-    return runLegacyScan(website, periodDays);
+    return runPdfScan(website, periodDays);
   }
 
   // Build the list of engines this website opted into, gated by configured keys.
@@ -297,20 +298,22 @@ async function runSingleScan(website, periodDays) {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy single-provider scan — used for PDFs (auto-resolved engine, default
-// snapshot scope). Preserves the original behaviour for documents.
+// PDF scan — the URL points to a PDF document. Only the PDF text is scanned
+// (search/scrape engines are bypassed) and it is compared against the previous
+// scan's snapshot so the report reflects changes *since the last scan*.
 // ---------------------------------------------------------------------------
-async function runLegacyScan(website, periodDays) {
+async function runPdfScan(website, periodDays) {
   let newSnapshot = null;
 
   try {
     const { contentText, source, pages } = await scrapeWebsite(website.url, periodDays);
 
-    newSnapshot = saveSnapshot(website.id, contentText);
+    newSnapshot = saveSnapshot(website.id, contentText, 'pdf');
 
-    const oldSnapshot = findBaselineSnapshot(website.id, periodDays);
+    // Compare against the immediately preceding PDF scan, not the period baseline.
+    const oldSnapshot = getPreviousSnapshot(website.id, newSnapshot.id, 'pdf');
 
-    if (!oldSnapshot || oldSnapshot.id === newSnapshot.id) {
+    if (!oldSnapshot) {
       const llmSummary = await summarizeChanges({
         websiteUrl: website.url,
         websiteName: website.name,
@@ -348,7 +351,7 @@ async function runLegacyScan(website, periodDays) {
          VALUES (?, ?, ?, ?, 'no_changes', ?)`
       ).run(
         website.id, periodDays, oldSnapshot.id, newSnapshot.id,
-        `No changes detected on ${website.url} over the past ${periodDays} day(s).`
+        `No changes detected in the PDF at ${website.url} since the last scan.`
       );
 
       return {

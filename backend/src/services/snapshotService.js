@@ -46,9 +46,28 @@ function findBaselineSnapshot(websiteId, periodDays, provider = 'default') {
 }
 
 /**
- * Get the most recent snapshot for a website (before a given snapshot id).
+ * Get the most recent snapshot for a website before a given snapshot id.
+ * When `provider` is supplied, only that engine's snapshots are considered.
+ *
+ * @param {number} websiteId
+ * @param {number} beforeId
+ * @param {string} [provider] - optional engine scope (e.g. 'pdf')
+ * @returns {object|undefined}
  */
-function getPreviousSnapshot(websiteId, beforeId) {
+function getPreviousSnapshot(websiteId, beforeId, provider) {
+  if (provider !== undefined) {
+    return db
+      .prepare(
+        `
+        SELECT * FROM snapshots
+        WHERE website_id = ? AND provider = ? AND id < ?
+        ORDER BY id DESC
+        LIMIT 1
+      `
+      )
+      .get(websiteId, provider, beforeId);
+  }
+
   return db
     .prepare(
       `
