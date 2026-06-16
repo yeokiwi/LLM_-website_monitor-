@@ -4,14 +4,15 @@
  * Options:
  *   Firecrawl   — full-page clean markdown via the Firecrawl API (best diffs)
  *   Brave       — Brave Search API indexed, clean page content/snippets
+ *   Serper      — Serper (Google Search API) indexed snippets + news
  *   Direct      — axios + cheerio direct HTML fetch + text extraction (fallback)
  *
- * The SCRAPER_PROVIDER env var (brave | firecrawl | auto) selects the method;
- * `auto` (the default) uses whichever provider's API key is configured. See
- * resolveScraperProvider() for the precedence rules.
+ * The SCRAPER_PROVIDER env var (brave | serper | firecrawl | auto) selects the
+ * method; `auto` (the default) uses whichever provider's API key is configured.
+ * See resolveScraperProvider() for the precedence rules.
  *
- * The Brave path is period-aware: it adjusts search freshness so recent
- * content is surfaced first, and runs a dedicated "announcements" search
+ * The Brave and Serper paths are period-aware: they adjust search freshness so
+ * recent content is surfaced first, and run a dedicated "announcements" search
  * to capture releases, changelog entries, and blog posts.
  */
 
@@ -21,6 +22,7 @@ const crypto = require('crypto');
 const pdfParse = require('pdf-parse');
 
 const BRAVE_API_BASE = 'https://api.search.brave.com/res/v1';
+const SERPER_API_BASE = 'https://google.serper.dev';
 const FIRECRAWL_API_BASE = process.env.FIRECRAWL_BASE_URL || 'https://api.firecrawl.dev/v1';
 const MAX_CONTENT_CHARS = 14000; // slightly larger to give LLM more context
 const MAX_PDF_BYTES = 25 * 1024 * 1024; // 25 MB cap to avoid huge downloads
@@ -51,25 +53,31 @@ async function scrapeWebsite(url, periodDays = 30) {
   if (provider === 'brave') {
     return scrapeWithBrave(url, periodDays);
   }
+  if (provider === 'serper') {
+    return scrapeWithSerper(url, periodDays);
+  }
   return scrapeWithCheerio(url);
 }
 
 /**
  * Resolve which scraping backend to use based on SCRAPER_PROVIDER and which
- * API keys are configured. Returns 'firecrawl' | 'brave' | 'direct'.
+ * API keys are configured. Returns 'firecrawl' | 'brave' | 'serper' | 'direct'.
  *
  * Precedence:
  *   - SCRAPER_PROVIDER=firecrawl → firecrawl if FIRECRAWL_API_KEY set, else auto
  *   - SCRAPER_PROVIDER=brave     → brave if BRAVE_API_KEY set, else auto
+ *   - SCRAPER_PROVIDER=serper    → serper if SERPER_API_KEY set, else auto
  *   - auto (default/unset)       → firecrawl if FIRECRAWL_API_KEY, else brave if
- *                                  BRAVE_API_KEY, else direct
+ *                                  BRAVE_API_KEY, else serper if SERPER_API_KEY,
+ *                                  else direct
  *
- * In `auto`, Firecrawl is preferred over Brave because full-page content yields
- * richer change detection than Brave's snippets.
+ * In `auto`, Firecrawl is preferred over the search APIs because full-page
+ * content yields richer change detection than indexed snippets.
  */
 function resolveScraperProvider() {
   const hasFirecrawl = !!process.env.FIRECRAWL_API_KEY;
   const hasBrave = !!process.env.BRAVE_API_KEY;
+  const hasSerper = !!process.env.SERPER_API_KEY;
   const preference = (process.env.SCRAPER_PROVIDER || 'auto').toLowerCase();
 
   if (preference === 'firecrawl') {
@@ -78,11 +86,15 @@ function resolveScraperProvider() {
   } else if (preference === 'brave') {
     if (hasBrave) return 'brave';
     console.warn('SCRAPER_PROVIDER=brave but BRAVE_API_KEY is not set — falling back to auto selection.');
+  } else if (preference === 'serper') {
+    if (hasSerper) return 'serper';
+    console.warn('SCRAPER_PROVIDER=serper but SERPER_API_KEY is not set — falling back to auto selection.');
   }
 
   // auto (and the fall-through cases above)
   if (hasFirecrawl) return 'firecrawl';
   if (hasBrave) return 'brave';
+  if (hasSerper) return 'serper';
   return 'direct';
 }
 
@@ -90,7 +102,7 @@ function resolveScraperProvider() {
  * Scrape with an explicitly named provider (bypasses auto-resolution).
  * Used when a website opts into specific engines (Firecrawl and/or Brave).
  *
- * @param {'firecrawl'|'brave'|'direct'} provider
+ * @param {'firecrawl'|'brave'|'serper'|'direct'} provider
  * @param {string} url
  * @param {number} [periodDays=30]
  * @returns {{ contentText: string, source: string, pages: Array }}
@@ -98,6 +110,7 @@ function resolveScraperProvider() {
 async function scrapeWithProvider(provider, url, periodDays = 30) {
   if (provider === 'firecrawl') return scrapeWithFirecrawl(url);
   if (provider === 'brave') return scrapeWithBrave(url, periodDays);
+  if (provider === 'serper') return scrapeWithSerper(url, periodDays);
   return scrapeWithCheerio(url);
 }
 
@@ -291,7 +304,7 @@ async function scrapeWithBrave(url, periodDays) {
     });
   }
 
-  const contentText = formatBraveContent(url, domain, pages);
+  const contentText = formatSearchContent(url, domain, pages);
   return { contentText: contentText.slice(0, MAX_CONTENT_CHARS), source: 'brave', pages };
 }
 
@@ -308,7 +321,11 @@ async function braveFetch(endpoint, params) {
   return response.data;
 }
 
-function formatBraveContent(url, domain, pages) {
+/**
+ * Format an indexed-page list (from Brave or Serper) into LLM-ready text.
+ * Provider-agnostic — both search backends produce the same `pages` shape.
+ */
+function formatSearchContent(url, domain, pages) {
   if (pages.length === 0) {
     return `No indexed content found for ${url}`;
   }
@@ -321,6 +338,105 @@ function formatBraveContent(url, domain, pages) {
     lines.push('');
   });
   return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Serper (Google Search API)
+// ---------------------------------------------------------------------------
+
+/**
+ * Maps a monitoring period to a Serper `tbs` time filter.
+ *   qdr:w = past week | qdr:m = past month | qdr:y = past year
+ */
+function serperTbs(periodDays) {
+  if (periodDays <= 7) return 'qdr:w';
+  if (periodDays <= 31) return 'qdr:m';
+  return 'qdr:y';
+}
+
+async function scrapeWithSerper(url, periodDays) {
+  const domain = extractDomain(url);
+  const tbs = serperTbs(periodDays);
+
+  // Three parallel searches mirroring the Brave strategy:
+  //  1. Indexed pages on the domain (main content snapshot)
+  //  2. News coverage mentioning the domain
+  //  3. Announcement / changelog / release pages within the domain
+  const [webResults, newsResults, announcementResults] = await Promise.allSettled([
+    serperFetch('/search', {
+      q: `site:${domain}`,
+      num: 20,
+      tbs,
+    }),
+    serperFetch('/news', {
+      q: domain,
+      num: 10,
+      tbs,
+    }),
+    serperFetch('/search', {
+      q: `site:${domain} (blog OR changelog OR "release notes" OR announcement OR "what's new" OR news OR updates)`,
+      num: 10,
+      tbs,
+    }),
+  ]);
+
+  const pages = [];
+
+  if (webResults.status === 'fulfilled') {
+    const results = webResults.value?.organic || [];
+    results.forEach((r) => {
+      pages.push({
+        type: 'web',
+        title: r.title || '',
+        url: r.link || '',
+        description: r.snippet || '',
+        published: r.date || '',
+      });
+    });
+  }
+
+  if (newsResults.status === 'fulfilled') {
+    const results = newsResults.value?.news || [];
+    results.forEach((r) => {
+      pages.push({
+        type: 'news',
+        title: r.title || '',
+        url: r.link || '',
+        description: r.snippet || '',
+        published: r.date || '',
+      });
+    });
+  }
+
+  if (announcementResults.status === 'fulfilled') {
+    const results = announcementResults.value?.organic || [];
+    results.forEach((r) => {
+      // Only add if not already present (avoid duplicates)
+      if (!pages.some((p) => p.url === r.link)) {
+        pages.push({
+          type: 'announcement',
+          title: r.title || '',
+          url: r.link || '',
+          description: r.snippet || '',
+          published: r.date || '',
+        });
+      }
+    });
+  }
+
+  const contentText = formatSearchContent(url, domain, pages);
+  return { contentText: contentText.slice(0, MAX_CONTENT_CHARS), source: 'serper', pages };
+}
+
+async function serperFetch(endpoint, body) {
+  const response = await axios.post(`${SERPER_API_BASE}${endpoint}`, body, {
+    headers: {
+      'X-API-KEY': process.env.SERPER_API_KEY,
+      'Content-Type': 'application/json',
+    },
+    timeout: 15000,
+  });
+  return response.data;
 }
 
 // ---------------------------------------------------------------------------

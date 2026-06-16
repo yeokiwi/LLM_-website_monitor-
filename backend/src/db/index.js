@@ -63,7 +63,7 @@ for (const col of ['domain', 'srms_owner', 'srms', 'remark']) {
 try { db.exec(`ALTER TABLE scan_results ADD COLUMN remark TEXT`); } catch { /* already exists */ }
 
 // Per-website scraper selection flags. Default both engines on.
-for (const col of ['use_firecrawl', 'use_brave']) {
+for (const col of ['use_firecrawl', 'use_brave', 'use_serper']) {
   try { db.exec(`ALTER TABLE websites ADD COLUMN ${col} INTEGER DEFAULT 1`); } catch { /* already exists */ }
 }
 

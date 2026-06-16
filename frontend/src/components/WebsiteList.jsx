@@ -171,6 +171,14 @@ export default function WebsiteList({
                   />
                   Brave
                 </label>
+                <label className={s.scraperOption}>
+                  <input
+                    type="checkbox"
+                    checked={!!w.use_serper}
+                    onChange={(e) => onToggleScraper?.(w.id, 'use_serper', e.target.checked)}
+                  />
+                  Serper
+                </label>
               </td>
               <td className={s.center}>{w.snapshot_count ?? 0}</td>
               <td className={s.date}>

@@ -105,10 +105,10 @@ router.post('/bulk', (req, res) => {
 });
 
 // PATCH /api/websites/:id — update per-website scraper flags and/or remark
-// Body: { use_firecrawl?: 0|1|boolean, use_brave?: 0|1|boolean, remark?: string }
+// Body: { use_firecrawl?: 0|1|boolean, use_brave?: 0|1|boolean, use_serper?: 0|1|boolean, remark?: string }
 router.patch('/:id', (req, res) => {
   const { id } = req.params;
-  const { use_firecrawl, use_brave, remark } = req.body;
+  const { use_firecrawl, use_brave, use_serper, remark } = req.body;
 
   const updates = [];
   const values = [];
@@ -119,6 +119,10 @@ router.patch('/:id', (req, res) => {
   if (use_brave !== undefined) {
     updates.push('use_brave = ?');
     values.push(use_brave ? 1 : 0);
+  }
+  if (use_serper !== undefined) {
+    updates.push('use_serper = ?');
+    values.push(use_serper ? 1 : 0);
   }
   if (remark !== undefined) {
     updates.push('remark = ?');

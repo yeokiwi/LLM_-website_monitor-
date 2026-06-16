@@ -142,12 +142,14 @@ router.post('/', async (req, res) => {
 const PROVIDER_SECTION_LABELS = {
   firecrawl: 'Firecrawl Results',
   brave: 'Brave Search Results',
+  serper: 'Serper Search Results',
   direct: 'Direct Scrape Results',
 };
 
 const PROVIDER_SHORT_LABELS = {
   firecrawl: 'Firecrawl',
   brave: 'Brave',
+  serper: 'Serper',
   direct: 'Direct',
 };
 
@@ -224,6 +226,7 @@ async function runSingleScan(website, periodDays) {
   const providers = [];
   if (website.use_firecrawl && process.env.FIRECRAWL_API_KEY) providers.push('firecrawl');
   if (website.use_brave && process.env.BRAVE_API_KEY) providers.push('brave');
+  if (website.use_serper && process.env.SERPER_API_KEY) providers.push('serper');
 
   // No engine selected/available → fall back to a single direct scrape (legacy).
   const usingFallback = providers.length === 0;

@@ -82,6 +82,7 @@ app.listen(PORT, () => {
   const scraperLabels = {
     firecrawl: 'Firecrawl API',
     brave: 'Brave Search API',
+    serper: 'Serper Search API',
     direct: 'Direct (axios+cheerio)',
   };
   const scraper = scraperLabels[resolveScraperProvider()];
