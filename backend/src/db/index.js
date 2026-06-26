@@ -53,4 +53,27 @@ db.exec(`
     ON scan_results(website_id, scanned_at);
 `);
 
+// Additive migrations for SRMS metadata columns. SQLite throws on
+// duplicate ADD COLUMN, so each is wrapped — safe to re-run on existing DBs.
+for (const col of ['domain', 'srms_owner', 'srms', 'remark']) {
+  try { db.exec(`ALTER TABLE websites ADD COLUMN ${col} TEXT`); } catch { /* already exists */ }
+}
+
+// User-entered remark/comment on an individual scan result.
+try { db.exec(`ALTER TABLE scan_results ADD COLUMN remark TEXT`); } catch { /* already exists */ }
+
+// Per-website scraper selection flags. Default both engines on.
+for (const col of ['use_firecrawl', 'use_brave', 'use_serper']) {
+  try { db.exec(`ALTER TABLE websites ADD COLUMN ${col} INTEGER DEFAULT 1`); } catch { /* already exists */ }
+}
+
+// Provider-scoped snapshots so each engine diffs against its own history.
+try { db.exec(`ALTER TABLE snapshots ADD COLUMN provider TEXT DEFAULT 'default'`); } catch { /* already exists */ }
+try {
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_snapshots_website_provider_scraped
+             ON snapshots(website_id, provider, scraped_at)`);
+} catch { /* already exists */ }
+
 module.exports = db;
+module.exports.dbPath = dbPath;
+module.exports.Database = Database;

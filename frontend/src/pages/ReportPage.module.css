@@ -78,6 +78,7 @@
 }
 .tocItem:hover { background: #f3f4f6; color: #111827; }
 .tocSub { padding-left: 20px; font-size: 0.78rem; color: #6b7280; }
+.tocTop { font-weight: 700; color: #4338ca; margin-top: 6px; }
 .tocActive { background: #eff6ff; color: #2563eb; font-weight: 600; }
 
 .printBtn {
@@ -180,6 +181,18 @@
 /* ── Markdown typography ─────────────────────────────────────────────────── */
 
 .markdown { color: #1f2937; }
+
+.mdH1 {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: #4338ca;
+  letter-spacing: -0.4px;
+  margin: 44px 0 16px;
+  padding-bottom: 10px;
+  border-bottom: 3px solid #6366f1;
+  scroll-margin-top: 76px;
+}
+.mdH1:first-child { margin-top: 0; }
 
 .mdH2 {
   font-size: 1.2rem;

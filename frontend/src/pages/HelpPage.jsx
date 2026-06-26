@@ -137,7 +137,7 @@ export default function HelpPage() {
             <div className={s.featureCard}>
               <span className={s.featureIcon}>🌐</span>
               <strong>Multi-source scraping</strong>
-              <p>Uses Brave Search (web + news + announcements) or direct HTML fetching to gather the richest possible picture of a site.</p>
+              <p>Uses Firecrawl (full-page markdown), Brave or Serper Search (web + news + announcements), or direct HTML fetching to gather the richest possible picture of a site.</p>
             </div>
             <div className={s.featureCard}>
               <span className={s.featureIcon}>🤖</span>
@@ -274,7 +274,7 @@ export default function HelpPage() {
           <div className={s.pipeline}>
             <div className={s.pipelineStep}>
               <span className={s.pipelineNum}>1</span>
-              <span><strong>Scrape</strong> — Brave search (web + news + announcements) or direct HTML fetch</span>
+              <span><strong>Scrape</strong> — Firecrawl (full-page markdown), Brave or Serper search (web + news + announcements), or direct HTML fetch</span>
             </div>
             <div className={s.pipelineArrow}>↓</div>
             <div className={s.pipelineStep}>
@@ -488,13 +488,19 @@ export default function HelpPage() {
 
           <h3 className={s.subTitle}>Web scraping</h3>
           <div className={s.envTable}>
-            <div className={s.envRow}><code className={s.envKey}>BRAVE_API_KEY</code><span>Enables Brave Search API (recommended). Falls back to direct HTML scraping when not set.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>SCRAPER_PROVIDER</code><span>Which scraper to use: <code className={s.code}>firecrawl</code>, <code className={s.code}>brave</code>, <code className={s.code}>serper</code>, or <code className={s.code}>auto</code> (default). <code className={s.code}>auto</code> picks Firecrawl, then Brave, then Serper, then direct scraping based on which key is set.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>FIRECRAWL_API_KEY</code><span>Enables Firecrawl full-page markdown scraping — captures the actual rendered page for the richest diffs.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>FIRECRAWL_BASE_URL</code><span>Optional. Override the Firecrawl API base (e.g. a self-hosted instance).</span></div>
+            <div className={s.envRow}><code className={s.envKey}>BRAVE_API_KEY</code><span>Enables Brave Search API (indexed content). Falls back to direct HTML scraping when no provider key is set.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>SERPER_API_KEY</code><span>Enables Serper (Google Search API) for indexed content + news — an alternative to Brave.</span></div>
           </div>
 
           <Callout type="tip">
-            The Brave Search API provides richer data — indexed pages with publication dates,
-            news results, and announcement pages — giving the LLM much more to work with.
-            Get a free key at <strong>api.search.brave.com</strong>.
+            Firecrawl returns clean full-page markdown of the rendered page — ideal for detecting
+            real content changes. The Brave and Serper Search APIs instead provide indexed pages with
+            publication dates, news results, and announcement pages. Get a Firecrawl key at
+            <strong> firecrawl.dev</strong>, a free Brave key at <strong>api.search.brave.com</strong>,
+            or a Serper key at <strong>serper.dev</strong>.
           </Callout>
 
           <h3 className={s.subTitle}>Database</h3>
@@ -523,9 +529,10 @@ export default function HelpPage() {
             <p className={s.faqA}>
               "No Changes" means the scraped <em>content hash</em> is identical to the baseline.
               This can happen when: (a) the change is in a part of the page the scraper ignores
-              (e.g. dynamic JavaScript content), (b) without a Brave API key the scraper only fetches
-              the homepage, or (c) the change happened before the monitoring period you selected.
-              Try enabling the Brave API key for more comprehensive coverage.
+              (e.g. dynamic JavaScript content), (b) without a Firecrawl, Brave, or Serper API key the
+              scraper only fetches the homepage, or (c) the change happened before the monitoring
+              period you selected. Try enabling Firecrawl, the Brave API, or Serper for more
+              comprehensive coverage.
             </p>
           </details>
 
@@ -564,7 +571,7 @@ export default function HelpPage() {
               Everything is stored locally in a SQLite database file at the path set by
               <code className={s.code}> DB_PATH</code> (default <code className={s.code}>backend/data/monitor.db</code>).
               No data is sent anywhere except to the LLM API you configure and (optionally) the
-              Brave Search API.
+              Firecrawl, Brave, or Serper Search API.
             </p>
           </details>
 

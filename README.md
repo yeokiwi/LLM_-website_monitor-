@@ -48,7 +48,7 @@ Website Monitor lets you track what changes on any website over time without man
 
 - **Manual or bulk website entry** — add sites one by one, or upload an Excel/CSV file containing a list of URLs
 - **Flexible time periods** — 30 days, 60 days, 90 days, or any custom number of days
-- **Brave Search API integration** — uses Brave's indexed, clean page content for change detection (direct HTTP scraping fallback when no Brave key is configured)
+- **Pluggable scraping providers** — choose Firecrawl (full-page clean markdown), the Brave Search API or Serper (Google Search) for indexed content/snippets, or direct HTTP scraping; selected via `SCRAPER_PROVIDER` with automatic fallback based on which API key is configured
 - **Any OpenAI-compatible LLM** — works with Claude, OpenAI, Ollama, LM Studio, Groq, Together AI, Mistral AI, DeepSeek, Perplexity, and any other endpoint that speaks the OpenAI chat completions API; configured entirely via environment variables
 - **Persistent snapshot storage** — every scan stores a content snapshot in SQLite so future scans always have a baseline to compare against
 - **Intelligent scan statuses** — skips LLM calls when content is unchanged; handles first-time scans gracefully
@@ -63,7 +63,7 @@ Add websites  →  Choose period  →  Trigger scan
                                         │
                           ┌─────────────▼──────────────┐
                           │  1. Fetch current content   │
-                          │     (Brave API or direct)   │
+                          │  (Firecrawl/Brave/direct)   │
                           │  2. Store new snapshot      │
                           │  3. Find baseline snapshot  │
                           │     from N days ago         │
@@ -87,7 +87,7 @@ Add websites  →  Choose period  →  Trigger scan
 | Backend runtime | Node.js 18+ |
 | Backend framework | Express 4 |
 | Database | SQLite via `better-sqlite3` (no server required) |
-| Web scraping | Brave Search API (primary) · axios + cheerio (fallback) |
+| Web scraping | Firecrawl API · Brave Search API · Serper Search API · axios + cheerio (fallback) |
 | Excel / CSV parsing | SheetJS (`xlsx`) |
 | File upload | multer |
 | Text diffing | `diff` (line-level) |
@@ -116,7 +116,7 @@ Add websites  →  Choose period  →  Trigger scan
 │       │   ├── scans.js        ← scan orchestration & results
 │       │   └── upload.js       ← Excel / CSV upload endpoint
 │       └── services/
-│           ├── scraper.js      ← Brave API + axios/cheerio fallback
+│           ├── scraper.js      ← Firecrawl / Brave / Serper API / axios+cheerio fallback
 │           ├── snapshotService.js  ← save / retrieve snapshots
 │           ├── diffService.js      ← compute line diff
 │           └── llmService.js       ← Claude / any OpenAI-compatible endpoint
@@ -149,7 +149,9 @@ Add websites  →  Choose period  →  Trigger scan
 | Node.js | 18 or later | https://nodejs.org |
 | npm | 8 or later | bundled with Node.js |
 | LLM API key | — | One of: Anthropic, OpenAI, Groq, Together AI, Mistral, etc. — or none for local models (Ollama/LM Studio) |
-| Brave Search API key | — | Optional but recommended — https://api.search.brave.com |
+| Firecrawl API key | — | Optional — full-page markdown scraping, https://firecrawl.dev |
+| Brave Search API key | — | Optional — indexed search content, https://api.search.brave.com |
+| Serper API key | — | Optional — indexed search content (alternative to Brave), https://serper.dev |
 
 ---
 
@@ -234,13 +236,24 @@ OPENAI_API_KEY=...
 OPENAI_BASE_URL=https://api.deepseek.com/v1
 ```
 
-Add your Brave Search API key (recommended) and leave the SQLite path as-is:
+Choose a scraping provider and add the matching API key, then leave the SQLite path as-is:
 ```dotenv
+# Pick one: firecrawl | brave | serper | auto (default: auto)
+SCRAPER_PROVIDER=auto
+
+# Firecrawl — full-page clean markdown (richer diffs)
+FIRECRAWL_API_KEY=fc-...
+
+# Brave Search API — indexed content/snippets
 BRAVE_API_KEY=BSA...
+
+# Serper (Google Search API) — indexed content/snippets (alternative to Brave)
+SERPER_API_KEY=...
+
 DB_PATH=./data/monitor.db
 ```
 
-> **Tip:** If `BRAVE_API_KEY` is not set, the app falls back to fetching pages directly with HTTP. Some sites may block automated requests in this mode.
+> **Tip:** With `SCRAPER_PROVIDER=auto`, the app uses Firecrawl if `FIRECRAWL_API_KEY` is set, otherwise Brave if `BRAVE_API_KEY` is set, otherwise Serper if `SERPER_API_KEY` is set, otherwise it falls back to fetching pages directly with HTTP (axios + cheerio). Some sites may block automated requests in the direct mode.
 
 ### 3. Install dependencies
 
@@ -311,6 +324,8 @@ docker run -p 3001:3001 \
   -e JWT_SECRET=your-random-secret \
   -e LLM_PROVIDER=claude \
   -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e SCRAPER_PROVIDER=auto \
+  -e FIRECRAWL_API_KEY=fc-... \
   -e BRAVE_API_KEY=BSA... \
   website-monitor
 ```
@@ -361,7 +376,10 @@ In your Railway service go to **Variables** and add:
 | `ANTHROPIC_API_KEY` | `sk-ant-...` *(if using Claude)* |
 | `OPENAI_API_KEY` | `sk-...` *(if using an OpenAI-compatible provider)* |
 | `OPENAI_BASE_URL` | *(if using a non-OpenAI endpoint)* |
-| `BRAVE_API_KEY` | `BSA...` *(recommended)* |
+| `SCRAPER_PROVIDER` | `auto` *(or `firecrawl` / `brave` / `serper`)* |
+| `FIRECRAWL_API_KEY` | `fc-...` *(if using Firecrawl)* |
+| `BRAVE_API_KEY` | `BSA...` *(if using Brave)* |
+| `SERPER_API_KEY` | `...` *(if using Serper)* |
 | `DB_PATH` | `/data/monitor.db` |
 
 > `PORT` is set automatically by Railway — do not add it manually.
@@ -395,7 +413,11 @@ All variables are set in `backend/.env`.
 | `ANTHROPIC_API_KEY` | — | When `LLM_PROVIDER=claude` | API key from https://console.anthropic.com |
 | `OPENAI_API_KEY` | — | For hosted services | API key. Set to any non-empty string for local models that don't require auth |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | No | Base URL for the OpenAI-compatible endpoint (see provider table below) |
-| `BRAVE_API_KEY` | — | Recommended | API key from https://api.search.brave.com |
+| `SCRAPER_PROVIDER` | `auto` | No | Scraper to use: `firecrawl`, `brave`, `serper`, or `auto`. `auto` picks Firecrawl, then Brave, then Serper, then direct scraping based on which key is set |
+| `FIRECRAWL_API_KEY` | — | No | API key from https://firecrawl.dev — enables full-page markdown scraping |
+| `FIRECRAWL_BASE_URL` | `https://api.firecrawl.dev/v1` | No | Override the Firecrawl API base (e.g. self-hosted instance) |
+| `BRAVE_API_KEY` | — | No | API key from https://api.search.brave.com — enables indexed search content |
+| `SERPER_API_KEY` | — | No | API key from https://serper.dev — enables indexed search content (alternative to Brave) |
 | `DB_PATH` | `./data/monitor.db` | No | Path to the SQLite database file |
 
 > **Generate a secure `JWT_SECRET`:**
@@ -534,7 +556,7 @@ Ensure `backend/.env` exists and `LLM_PROVIDER=claude` with a valid `ANTHROPIC_A
 Double-check that `OPENAI_API_KEY` contains the correct API key for that provider, and that `OPENAI_BASE_URL` matches the provider's documented base URL exactly (no trailing slash).
 
 **Scans return `status: error` with a network message**
-- The target website may be blocking automated requests. Try enabling the Brave Search API (`BRAVE_API_KEY`) which uses Brave's indexed content rather than direct HTTP fetches.
+- The target website may be blocking automated requests. Try enabling Firecrawl (`FIRECRAWL_API_KEY`), which renders the page and returns clean markdown, or a search API — Brave (`BRAVE_API_KEY`) or Serper (`SERPER_API_KEY`) — which uses indexed content rather than direct HTTP fetches.
 - Check that the URL includes the `https://` prefix and is publicly accessible.
 
 **Frontend shows "Failed to load websites"**

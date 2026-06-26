@@ -35,6 +35,18 @@
 .site { display: flex; flex-direction: column; min-width: 0; }
 .siteName { font-weight: 600; font-size: 0.9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .siteUrl { font-size: 0.78rem; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.metaChip {
+  font-size: 0.7rem;
+  background: #f1f5f9;
+  color: #475569;
+  padding: 2px 8px;
+  border-radius: 12px;
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .diffBadge { font-size: 0.78rem; background: #e0e7ff; color: #4338ca; padding: 2px 8px; border-radius: 20px; white-space: nowrap; }
 .period { font-size: 0.78rem; color: #9ca3af; }
@@ -91,3 +103,54 @@
   font-size: 0.88rem;
   color: #b91c1c;
 }
+
+/* Per-scan remark / comment box */
+.remark {
+  padding: 12px 18px 16px;
+  border-top: 1px solid #f3f4f6;
+  background: #fcfcfd;
+}
+.remarkLabel {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #6b7280;
+  margin-bottom: 6px;
+}
+.remarkInput {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: inherit;
+  font-size: 0.88rem;
+  color: #374151;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  resize: vertical;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.remarkInput::placeholder { color: #9ca3af; }
+.remarkInput:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+.remarkInput:disabled { background: #f3f4f6; cursor: wait; }
+.remarkActions { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.remarkSaveBtn {
+  background: #6366f1;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.remarkSaveBtn:hover:not(:disabled) { background: #4f46e5; }
+.remarkSaveBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.remarkSavedMsg { font-size: 0.8rem; color: #16a34a; font-weight: 600; }

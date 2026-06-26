@@ -16,10 +16,12 @@ function slugify(text) {
     .replace(/^-|-$/g, '');
 }
 
-/** Parse ## headings from raw markdown to build a table of contents. */
+/** Parse #/##/### headings from raw markdown to build a table of contents. */
 function extractTOC(markdown) {
   const headings = [];
   for (const line of markdown.split('\n')) {
+    const m1 = line.match(/^# (.+)$/);
+    if (m1) { headings.push({ level: 1, text: m1[1].trim(), id: slugify(m1[1]) }); continue; }
     const m2 = line.match(/^## (.+)$/);
     if (m2) { headings.push({ level: 2, text: m2[1].trim(), id: slugify(m2[1]) }); continue; }
     const m3 = line.match(/^### (.+)$/);
@@ -43,12 +45,18 @@ export function stripMarkdown(text = '') {
 
 /** Determine whether a llm_summary field is a structured markdown report. */
 export function isMarkdownReport(text = '') {
-  return text.trimStart().startsWith('##');
+  return /^#{1,6}\s/.test(text.trimStart());
 }
 
 // ---------------------------------------------------------------------------
 // Custom react-markdown component overrides
 // ---------------------------------------------------------------------------
+
+/** Render h1 (per-engine section heading) with a slug id for the TOC. */
+function Heading1({ children }) {
+  const text = Array.isArray(children) ? children.join('') : String(children ?? '');
+  return <h1 id={slugify(text)} className={s.mdH1}>{children}</h1>;
+}
 
 /** Render h2 with a slug id so the TOC can scroll to it. */
 function Heading2({ children }) {
@@ -62,6 +70,7 @@ function Heading3({ children }) {
 }
 
 const MD_COMPONENTS = {
+  h1: Heading1,
   h2: Heading2,
   h3: Heading3,
   ul: ({ children }) => <ul className={s.mdUl}>{children}</ul>,
@@ -187,7 +196,7 @@ export default function ReportPage() {
                 {toc.map((h) => (
                   <button
                     key={h.id}
-                    className={`${s.tocItem} ${h.level === 3 ? s.tocSub : ''} ${activeSection === h.id ? s.tocActive : ''}`}
+                    className={`${s.tocItem} ${h.level === 1 ? s.tocTop : ''} ${h.level === 3 ? s.tocSub : ''} ${activeSection === h.id ? s.tocActive : ''}`}
                     onClick={() => scrollTo(h.id)}
                     title={h.text}
                   >

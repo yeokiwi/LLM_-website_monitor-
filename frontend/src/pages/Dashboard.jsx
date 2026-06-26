@@ -4,7 +4,8 @@ import ExcelUpload from '../components/ExcelUpload';
 import WebsiteList from '../components/WebsiteList';
 import PeriodSelector from '../components/PeriodSelector';
 import ScanResultCard from '../components/ScanResultCard';
-import { getWebsites, deleteWebsite } from '../api/client';
+import DataBackup from '../components/DataBackup';
+import { getWebsites, deleteWebsite, bulkDeleteWebsites, updateWebsite, bulkUpdateWebsites } from '../api/client';
 import { useScan } from '../context/ScanContext';
 import s from './Dashboard.module.css';
 
@@ -38,10 +39,57 @@ export default function Dashboard() {
     );
   }
 
+  async function handleToggleScraper(id, field, value) {
+    const next = value ? 1 : 0;
+    // Optimistic update; revert from server if the request fails.
+    setWebsites((prev) => prev.map((w) => (w.id === id ? { ...w, [field]: next } : w)));
+    try {
+      await updateWebsite(id, { [field]: next });
+    } catch {
+      loadWebsites();
+    }
+  }
+
+  async function handleToggleScraperAll(field, value) {
+    const next = value ? 1 : 0;
+    const ids = websites.map((w) => w.id);
+    // Optimistic update for every row; revert from server on failure.
+    setWebsites((prev) => prev.map((w) => ({ ...w, [field]: next })));
+    try {
+      await bulkUpdateWebsites(ids, { [field]: next });
+    } catch {
+      loadWebsites();
+    }
+  }
+
+  async function handleSaveRemark(id, remark) {
+    setWebsites((prev) => prev.map((w) => (w.id === id ? { ...w, remark } : w)));
+    try {
+      await updateWebsite(id, { remark });
+    } catch {
+      loadWebsites();
+    }
+  }
+
   async function handleDelete(id) {
     await deleteWebsite(id);
     setSelected((prev) => prev.filter((x) => x !== id));
     loadWebsites();
+  }
+
+  async function handleDeleteSelected() {
+    if (selected.length === 0) return;
+    const ok = window.confirm(
+      `Remove ${selected.length} selected website(s)? This will also hide their scan history.`
+    );
+    if (!ok) return;
+    try {
+      await bulkDeleteWebsites(selected);
+      setSelected([]);
+      loadWebsites();
+    } catch (err) {
+      setLoadError(err.response?.data?.error || 'Failed to remove selected websites');
+    }
   }
 
   function handleScan() {
@@ -60,6 +108,7 @@ export default function Dashboard() {
         </div>
         <div className={s.divider}>or</div>
         <ExcelUpload onImported={loadWebsites} />
+        <DataBackup onImported={loadWebsites} />
       </section>
 
       {/* Website list + scan controls */}
@@ -68,6 +117,14 @@ export default function Dashboard() {
           <h2 className={s.sectionTitle}>Monitored Websites ({websites.length})</h2>
           <div className={s.controls}>
             <PeriodSelector value={period} onChange={setPeriod} />
+            <button
+              className={s.deleteSelectedBtn}
+              onClick={handleDeleteSelected}
+              disabled={scanning || selected.length === 0}
+              title="Remove selected websites"
+            >
+              Delete Selected ({selected.length})
+            </button>
             <button
               className={s.scanBtn}
               onClick={handleScan}
@@ -104,6 +161,9 @@ export default function Dashboard() {
           onToggle={handleToggle}
           onSelectAll={setSelected}
           onDelete={handleDelete}
+          onToggleScraper={handleToggleScraper}
+          onToggleScraperAll={handleToggleScraperAll}
+          onSaveRemark={handleSaveRemark}
         />
       </section>
 

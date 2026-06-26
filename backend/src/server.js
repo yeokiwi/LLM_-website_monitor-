@@ -10,9 +10,11 @@ require('./db');
 const websitesRouter = require('./routes/websites');
 const scansRouter = require('./routes/scans');
 const uploadRouter = require('./routes/upload');
+const databaseRouter = require('./routes/database');
 const authRouter = require('./routes/auth');
 const { requireAuth } = require('./middleware/auth');
 const { getLLMInfo } = require('./services/llmService');
+const { resolveScraperProvider } = require('./services/scraper');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -34,7 +36,7 @@ app.use('/api/auth', authRouter);
 // Health check is public so Railway's healthcheck works without a token
 app.get('/api/health', (req, res) => {
   const llm = getLLMInfo();
-  const scraper = process.env.BRAVE_API_KEY ? 'brave' : 'direct';
+  const scraper = resolveScraperProvider();
   res.json({
     status: 'ok',
     llmProvider: llm.provider,
@@ -48,6 +50,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/websites', requireAuth, websitesRouter);
 app.use('/api/scans',    requireAuth, scansRouter);
 app.use('/api/upload',   requireAuth, uploadRouter);
+app.use('/api/database', requireAuth, databaseRouter);
 
 // Website-specific scans shortcut
 app.use('/api/websites/:websiteId/scans', requireAuth, (req, res, next) => {
@@ -78,7 +81,13 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
   const llm = getLLMInfo();
-  const scraper = process.env.BRAVE_API_KEY ? 'Brave Search API' : 'Direct (axios+cheerio)';
+  const scraperLabels = {
+    firecrawl: 'Firecrawl API',
+    brave: 'Brave Search API',
+    serper: 'Serper Search API',
+    direct: 'Direct (axios+cheerio)',
+  };
+  const scraper = scraperLabels[resolveScraperProvider()];
   console.log(`\n🚀 Website Monitor backend running on http://localhost:${PORT}`);
   console.log(`   LLM provider : ${llm.provider}`);
   console.log(`   LLM model    : ${llm.model}`);

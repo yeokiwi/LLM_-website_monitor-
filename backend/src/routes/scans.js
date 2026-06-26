@@ -1,7 +1,7 @@
 const express = require('express');
 const db = require('../db');
-const { scrapeWebsite } = require('../services/scraper');
-const { saveSnapshot, findBaselineSnapshot, getSnapshot } = require('../services/snapshotService');
+const { scrapeWebsite, scrapeWithProvider, scrapePdf, isPdfUrl } = require('../services/scraper');
+const { saveSnapshot, findBaselineSnapshot, getPreviousSnapshot, getSnapshot } = require('../services/snapshotService');
 const { computeDiff } = require('../services/diffService');
 const { summarizeChanges } = require('../services/llmService');
 
@@ -17,7 +17,7 @@ router.get('/', (req, res) => {
   const results = db
     .prepare(
       `
-      SELECT sr.*, w.url, w.name
+      SELECT sr.*, w.url, w.name, w.domain, w.srms_owner, w.srms
       FROM scan_results sr
       JOIN websites w ON sr.website_id = w.id
       ORDER BY sr.scanned_at DESC
@@ -40,7 +40,7 @@ router.get('/:id', (req, res) => {
   const scan = db
     .prepare(
       `
-      SELECT sr.*, w.url, w.name
+      SELECT sr.*, w.url, w.name, w.domain, w.srms_owner, w.srms
       FROM scan_results sr
       JOIN websites w ON sr.website_id = w.id
       WHERE sr.id = ?
@@ -68,6 +68,28 @@ router.get('/website/:websiteId', (req, res) => {
     .all(req.params.websiteId);
 
   res.json(scans);
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/scans/:id — save a user remark/comment on a scan result
+// Body: { remark: string }
+// ---------------------------------------------------------------------------
+router.patch('/:id', (req, res) => {
+  const { remark } = req.body;
+  if (remark === undefined) {
+    return res.status(400).json({ error: 'remark is required' });
+  }
+
+  const result = db
+    .prepare('UPDATE scan_results SET remark = ? WHERE id = ?')
+    .run(remark === null ? null : String(remark), req.params.id);
+
+  if (result.changes === 0) {
+    return res.status(404).json({ error: 'Scan not found' });
+  }
+
+  const scan = db.prepare('SELECT * FROM scan_results WHERE id = ?').get(req.params.id);
+  res.json(scan);
 });
 
 // ---------------------------------------------------------------------------
@@ -110,22 +132,192 @@ router.post('/', async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // Core scan logic for a single website
+//
+// Each website can opt into one or more scraper engines (Firecrawl / Brave).
+// Every selected engine is scraped independently and diffed against its own
+// provider-scoped history; the per-engine analyses are combined into a single
+// report with one top-level "# <Engine> Results" section per engine.
 // ---------------------------------------------------------------------------
+
+const PROVIDER_SECTION_LABELS = {
+  firecrawl: 'Firecrawl Results',
+  brave: 'Brave Search Results',
+  serper: 'Serper Search Results',
+  direct: 'Direct Scrape Results',
+};
+
+const PROVIDER_SHORT_LABELS = {
+  firecrawl: 'Firecrawl',
+  brave: 'Brave',
+  serper: 'Serper',
+  direct: 'Direct',
+};
+
+/**
+ * Scrape, snapshot, diff and summarise a single website with one engine.
+ * @returns {{ status, markdown, newSnapshotId, oldSnapshotId, diffSummary }}
+ */
+async function scanOneProvider(website, periodDays, provider) {
+  const { contentText, pages } = await scrapeWithProvider(provider, website.url, periodDays);
+
+  const snap = saveSnapshot(website.id, contentText, provider);
+  const baseline = findBaselineSnapshot(website.id, periodDays, provider);
+
+  // First scan for this engine — no history yet.
+  if (!baseline || baseline.id === snap.id) {
+    const md = await summarizeChanges({
+      websiteUrl: website.url,
+      websiteName: website.name,
+      periodDays,
+      oldContent: '',
+      newContent: contentText,
+      diffText: '',
+      pages,
+      isFirstScan: true,
+    });
+    return { status: 'no_history', markdown: md, newSnapshotId: snap.id, oldSnapshotId: null, diffSummary: null };
+  }
+
+  const { diffText, hasChanges, addedLines, removedLines } = computeDiff(
+    baseline.content_text,
+    contentText
+  );
+
+  if (!hasChanges) {
+    return {
+      status: 'no_changes',
+      markdown: `No changes detected over the past ${periodDays} day(s).`,
+      newSnapshotId: snap.id,
+      oldSnapshotId: baseline.id,
+      diffSummary: null,
+    };
+  }
+
+  const md = await summarizeChanges({
+    websiteUrl: website.url,
+    websiteName: website.name,
+    periodDays,
+    oldContent: baseline.content_text,
+    newContent: contentText,
+    diffText,
+    pages,
+    isFirstScan: false,
+  });
+
+  return {
+    status: 'completed',
+    markdown: md,
+    newSnapshotId: snap.id,
+    oldSnapshotId: baseline.id,
+    diffSummary: `+${addedLines}/-${removedLines}`,
+  };
+}
+
 async function runSingleScan(website, periodDays) {
+  // PDFs are scanned as documents only (search/scrape engines bypassed) and
+  // diffed against the previous scan rather than the period baseline.
+  let pdf = false;
+  try { pdf = await isPdfUrl(website.url); } catch { /* treat as non-PDF */ }
+  if (pdf) {
+    return runPdfScan(website, periodDays);
+  }
+
+  // Build the list of engines this website opted into, gated by configured keys.
+  const providers = [];
+  if (website.use_firecrawl && process.env.FIRECRAWL_API_KEY) providers.push('firecrawl');
+  if (website.use_brave && process.env.BRAVE_API_KEY) providers.push('brave');
+  if (website.use_serper && process.env.SERPER_API_KEY) providers.push('serper');
+
+  // No engine selected/available → fall back to a single direct scrape (legacy).
+  const usingFallback = providers.length === 0;
+  if (usingFallback) providers.push('direct');
+
+  const sections = [];
+  const statuses = [];
+  const diffParts = [];
+  let primaryNewSnapshotId = null;
+  let primaryOldSnapshotId = null;
+  let lastError = null;
+
+  for (const provider of providers) {
+    let body;
+    let status;
+    try {
+      const r = await scanOneProvider(website, periodDays, provider);
+      body = r.markdown;
+      status = r.status;
+      if (primaryNewSnapshotId === null) {
+        primaryNewSnapshotId = r.newSnapshotId;
+        primaryOldSnapshotId = r.oldSnapshotId;
+      }
+      if (r.diffSummary) diffParts.push(`${PROVIDER_SHORT_LABELS[provider]}: ${r.diffSummary}`);
+    } catch (err) {
+      console.error(`Scan failed for ${website.url} [${provider}]:`, err.message);
+      body = `**Error:** ${err.message}`;
+      status = 'error';
+      lastError = err;
+    }
+    statuses.push(status);
+    sections.push(usingFallback ? body : `# ${PROVIDER_SECTION_LABELS[provider]}\n\n${body}`);
+  }
+
+  const combined = sections.join('\n\n');
+
+  // Aggregate the per-engine outcomes into one row-level status.
+  let status;
+  if (statuses.includes('completed')) status = 'completed';
+  else if (statuses.includes('no_history')) status = 'no_history';
+  else if (statuses.every((st) => st === 'no_changes')) status = 'no_changes';
+  else status = 'error';
+
+  // Every engine failed before saving a snapshot — mirror the legacy behaviour
+  // (no row inserted because new_snapshot_id is NOT NULL).
+  if (primaryNewSnapshotId === null) {
+    return {
+      scanId: null,
+      websiteId: website.id,
+      url: website.url,
+      status: 'error',
+      error: lastError ? lastError.message : 'Scan failed',
+    };
+  }
+
+  const diffSummary = diffParts.length ? diffParts.join(' · ') : null;
+
+  const result = db.prepare(
+    `INSERT INTO scan_results (website_id, period_days, old_snapshot_id, new_snapshot_id, diff_summary, llm_summary, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run(website.id, periodDays, primaryOldSnapshotId, primaryNewSnapshotId, diffSummary, combined, status);
+
+  return {
+    scanId: result.lastInsertRowid,
+    websiteId: website.id,
+    url: website.url,
+    status,
+    llm_summary: combined,
+    diff_summary: diffSummary,
+    source: providers.join('+'),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// PDF scan — the URL points to a PDF document. Only the PDF text is scanned
+// (search/scrape engines are bypassed) and it is compared against the previous
+// scan's snapshot so the report reflects changes *since the last scan*.
+// ---------------------------------------------------------------------------
+async function runPdfScan(website, periodDays) {
   let newSnapshot = null;
 
   try {
-    // 1. Scrape current content (period-aware for freshness tuning)
-    const { contentText, source, pages } = await scrapeWebsite(website.url, periodDays);
+    // Scrape the PDF document directly (no redundant content-type re-detection).
+    const { contentText, source, pages } = await scrapePdf(website.url);
 
-    // 2. Save new snapshot
-    newSnapshot = saveSnapshot(website.id, contentText);
+    newSnapshot = saveSnapshot(website.id, contentText, 'pdf');
 
-    // 3. Find baseline snapshot from the specified period
-    const oldSnapshot = findBaselineSnapshot(website.id, periodDays);
+    // Compare against the immediately preceding PDF scan, not the period baseline.
+    const oldSnapshot = getPreviousSnapshot(website.id, newSnapshot.id, 'pdf');
 
-    // --- First scan: no history — run an initial analysis report ---
-    if (!oldSnapshot || oldSnapshot.id === newSnapshot.id) {
+    if (!oldSnapshot) {
       const llmSummary = await summarizeChanges({
         websiteUrl: website.url,
         websiteName: website.name,
@@ -152,7 +344,6 @@ async function runSingleScan(website, periodDays) {
       };
     }
 
-    // 4. Check if content changed
     const { diffText, hasChanges, addedLines, removedLines } = computeDiff(
       oldSnapshot.content_text,
       contentText
@@ -164,7 +355,7 @@ async function runSingleScan(website, periodDays) {
          VALUES (?, ?, ?, ?, 'no_changes', ?)`
       ).run(
         website.id, periodDays, oldSnapshot.id, newSnapshot.id,
-        `No changes detected on ${website.url} over the past ${periodDays} day(s).`
+        `No changes detected in the PDF at ${website.url} since the last scan.`
       );
 
       return {
@@ -176,7 +367,6 @@ async function runSingleScan(website, periodDays) {
       };
     }
 
-    // 5. Produce structured LLM analysis report
     const llmSummary = await summarizeChanges({
       websiteUrl: website.url,
       websiteName: website.name,
@@ -190,7 +380,6 @@ async function runSingleScan(website, periodDays) {
 
     const diffSummary = `+${addedLines} lines / -${removedLines} lines`;
 
-    // 6. Save completed result
     const result = db.prepare(
       `INSERT INTO scan_results (website_id, period_days, old_snapshot_id, new_snapshot_id, diff_summary, llm_summary, status)
        VALUES (?, ?, ?, ?, ?, ?, 'completed')`
