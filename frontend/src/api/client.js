@@ -5,18 +5,22 @@ const api = axios.create({ baseURL: '/api' });
 // ── Token helpers ─────────────────────────────────────────────────────────────
 const TOKEN_KEY = 'wm_token';
 const USER_KEY  = 'wm_user';
+const ROLE_KEY  = 'wm_role';
 
 export const getStoredToken    = () => localStorage.getItem(TOKEN_KEY);
 export const getStoredUser     = () => localStorage.getItem(USER_KEY);
+export const getStoredRole     = () => localStorage.getItem(ROLE_KEY);
 
-export const storeSession = (token, username) => {
+export const storeSession = (token, username, role) => {
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(USER_KEY, username);
+  if (role) localStorage.setItem(ROLE_KEY, role);
 };
 
 export const clearSession = () => {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  localStorage.removeItem(ROLE_KEY);
 };
 
 // ── Request interceptor — attach JWT to every request ────────────────────────
@@ -125,6 +129,14 @@ export const updateScanRemark = (id, remark) =>
 
 export const getWebsiteScans = (websiteId) =>
   api.get(`/scans/website/${websiteId}`).then((r) => r.data);
+
+// Export scan reports as a single PDF. Pass an array of scan ids to export a
+// specific subset (e.g. the filtered history view); omit to export all.
+export const exportScansPdf = (ids) =>
+  api.get('/scans/export-pdf', {
+    responseType: 'blob',
+    params: ids && ids.length ? { ids: ids.join(',') } : undefined,
+  });
 
 // ── Health ────────────────────────────────────────────────────────────────────
 export const getHealth = () => api.get('/health').then((r) => r.data);

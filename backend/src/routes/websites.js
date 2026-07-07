@@ -1,6 +1,7 @@
 const express = require('express');
 const XLSX = require('xlsx');
 const db = require('../db');
+const { requireAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -26,8 +27,8 @@ router.get('/', (req, res) => {
   res.json(websites);
 });
 
-// POST /api/websites — add a single website
-router.post('/', (req, res) => {
+// POST /api/websites — add a single website (admin only)
+router.post('/', requireAdmin, (req, res) => {
   const { url, name, domain, srms_owner, srms } = req.body;
 
   if (!url) {
@@ -68,8 +69,8 @@ router.post('/', (req, res) => {
   }
 });
 
-// POST /api/websites/bulk — add multiple websites at once
-router.post('/bulk', (req, res) => {
+// POST /api/websites/bulk — add multiple websites at once (admin only)
+router.post('/bulk', requireAdmin, (req, res) => {
   const { websites } = req.body;
 
   if (!Array.isArray(websites) || websites.length === 0) {
@@ -110,7 +111,7 @@ router.post('/bulk', (req, res) => {
 
 // PATCH /api/websites/:id — update per-website scraper flags and/or remark
 // Body: { use_firecrawl?: 0|1|boolean, use_brave?: 0|1|boolean, use_serper?: 0|1|boolean, remark?: string }
-router.patch('/:id', (req, res) => {
+router.patch('/:id', requireAdmin, (req, res) => {
   const { id } = req.params;
   const { use_firecrawl, use_brave, use_serper, remark } = req.body;
 
@@ -150,8 +151,8 @@ router.patch('/:id', (req, res) => {
   res.json(website);
 });
 
-// DELETE /api/websites/:id — soft-delete (deactivate) a website
-router.delete('/:id', (req, res) => {
+// DELETE /api/websites/:id — soft-delete (deactivate) a website (admin only)
+router.delete('/:id', requireAdmin, (req, res) => {
   const { id } = req.params;
   const result = db
     .prepare('UPDATE websites SET is_active = 0 WHERE id = ?')
@@ -165,7 +166,7 @@ router.delete('/:id', (req, res) => {
 
 // POST /api/websites/bulk-delete — soft-delete many websites at once
 // Body: { ids: number[] }
-router.post('/bulk-delete', (req, res) => {
+router.post('/bulk-delete', requireAdmin, (req, res) => {
   const { ids } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) {
     return res.status(400).json({ error: 'ids must be a non-empty array' });
@@ -180,7 +181,7 @@ router.post('/bulk-delete', (req, res) => {
 // POST /api/websites/bulk-update — apply scraper flag(s) to many websites
 // Body: { ids?: number[], updates: { use_firecrawl?, use_brave?, use_serper? } }
 // When `ids` is omitted/empty the update applies to all active websites.
-router.post('/bulk-update', (req, res) => {
+router.post('/bulk-update', requireAdmin, (req, res) => {
   const { ids, updates } = req.body;
 
   if (!updates || typeof updates !== 'object') {
@@ -215,7 +216,7 @@ router.post('/bulk-update', (req, res) => {
 
 // GET /api/websites/export — download all active websites as an .xlsx
 // Columns round-trip with the Excel importer (POST /api/upload).
-router.get('/export', (req, res) => {
+router.get('/export', requireAdmin, (req, res) => {
   const websites = db
     .prepare(
       `SELECT url, name, domain, srms_owner, srms, use_firecrawl, use_brave, use_serper

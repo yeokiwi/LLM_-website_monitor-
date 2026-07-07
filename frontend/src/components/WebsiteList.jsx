@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import s from './WebsiteList.module.css';
 
 /** Inline-editable remark cell — saves on blur (or Enter) when changed. */
-function RemarkCell({ website, onSaveRemark }) {
+function RemarkCell({ website, onSaveRemark, canManage = true }) {
   const [value, setValue] = useState(website.remark || '');
   const [saving, setSaving] = useState(false);
 
@@ -19,6 +19,13 @@ function RemarkCell({ website, onSaveRemark }) {
     } finally {
       setSaving(false);
     }
+  }
+
+  // Read-only for non-admin users.
+  if (!canManage) {
+    return website.remark
+      ? <span className={s.readonlyText}>{website.remark}</span>
+      : <span className={s.unnamed}>—</span>;
   }
 
   return (
@@ -73,6 +80,7 @@ const SORT_KEYS = {
 export default function WebsiteList({
   websites,
   selected,
+  canManage = true,
   onToggle,
   onSelectAll,
   onDelete,
@@ -114,7 +122,9 @@ export default function WebsiteList({
   if (websites.length === 0) {
     return (
       <div className={s.empty}>
-        No websites added yet. Add one above or import from Excel.
+        {canManage
+          ? 'No websites added yet. Add one above or import from Excel.'
+          : 'No websites available yet. Ask an administrator to add websites to monitor.'}
       </div>
     );
   }
@@ -151,24 +161,34 @@ export default function WebsiteList({
             <th className={s.scraperHead}>
               <span className={s.scraperHeadTitle}>Scrape with</span>
               <div className={s.scraperHeadGroup}>
-                <ScraperAllCheckbox
-                  label="Firecrawl"
-                  field="use_firecrawl"
-                  websites={websites}
-                  onToggleScraperAll={onToggleScraperAll}
-                />
-                <ScraperAllCheckbox
-                  label="Brave"
-                  field="use_brave"
-                  websites={websites}
-                  onToggleScraperAll={onToggleScraperAll}
-                />
-                <ScraperAllCheckbox
-                  label="Serper"
-                  field="use_serper"
-                  websites={websites}
-                  onToggleScraperAll={onToggleScraperAll}
-                />
+                {canManage ? (
+                  <>
+                    <ScraperAllCheckbox
+                      label="Firecrawl"
+                      field="use_firecrawl"
+                      websites={websites}
+                      onToggleScraperAll={onToggleScraperAll}
+                    />
+                    <ScraperAllCheckbox
+                      label="Brave"
+                      field="use_brave"
+                      websites={websites}
+                      onToggleScraperAll={onToggleScraperAll}
+                    />
+                    <ScraperAllCheckbox
+                      label="Serper"
+                      field="use_serper"
+                      websites={websites}
+                      onToggleScraperAll={onToggleScraperAll}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <span className={s.scraperOption}>Firecrawl</span>
+                    <span className={s.scraperOption}>Brave</span>
+                    <span className={s.scraperOption}>Serper</span>
+                  </>
+                )}
               </div>
             </th>
             <th className={s.sortable} onClick={() => handleSort('snapshot_count')}>
@@ -178,7 +198,7 @@ export default function WebsiteList({
               Last scanned {sortIndicator('last_scanned_at')}
             </th>
             <th className={s.remarkHead}>Remark</th>
-            <th></th>
+            {canManage && <th></th>}
           </tr>
         </thead>
         <tbody>
@@ -207,6 +227,7 @@ export default function WebsiteList({
                   <input
                     type="checkbox"
                     checked={!!w.use_firecrawl}
+                    disabled={!canManage}
                     onChange={(e) => onToggleScraper?.(w.id, 'use_firecrawl', e.target.checked)}
                   />
                   Firecrawl
@@ -215,6 +236,7 @@ export default function WebsiteList({
                   <input
                     type="checkbox"
                     checked={!!w.use_brave}
+                    disabled={!canManage}
                     onChange={(e) => onToggleScraper?.(w.id, 'use_brave', e.target.checked)}
                   />
                   Brave
@@ -223,6 +245,7 @@ export default function WebsiteList({
                   <input
                     type="checkbox"
                     checked={!!w.use_serper}
+                    disabled={!canManage}
                     onChange={(e) => onToggleScraper?.(w.id, 'use_serper', e.target.checked)}
                   />
                   Serper
@@ -235,17 +258,19 @@ export default function WebsiteList({
                   : <span className={s.never}>Never</span>}
               </td>
               <td className={s.remarkCell}>
-                <RemarkCell website={w} onSaveRemark={onSaveRemark} />
+                <RemarkCell website={w} onSaveRemark={onSaveRemark} canManage={canManage} />
               </td>
-              <td className={s.actions}>
-                <button
-                  className={s.deleteBtn}
-                  onClick={() => onDelete(w.id)}
-                  title="Remove"
-                >
-                  ✕
-                </button>
-              </td>
+              {canManage && (
+                <td className={s.actions}>
+                  <button
+                    className={s.deleteBtn}
+                    onClick={() => onDelete(w.id)}
+                    title="Remove"
+                  >
+                    ✕
+                  </button>
+                </td>
+              )}
             </tr>
           ))}
         </tbody>

@@ -15,7 +15,7 @@ export default function LoginPage({ onLogin }) {
 
     try {
       const data = await login(username, password);
-      onLogin(data.token, data.username);
+      onLogin(data.token, data.username, data.role);
     } catch (err) {
       setError(err.response?.data?.error || 'Login failed. Please try again.');
     } finally {

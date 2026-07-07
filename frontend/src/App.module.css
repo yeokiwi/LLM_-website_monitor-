@@ -107,6 +107,20 @@
 .userName {
   font-size: 0.82rem;
   color: rgba(255,255,255,0.7);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.roleTag {
+  font-size: 0.66rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.15);
+  color: rgba(255,255,255,0.9);
 }
 
 .logoutBtn {

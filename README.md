@@ -53,6 +53,8 @@ Website Monitor lets you track what changes on any website over time without man
 - **Persistent snapshot storage** — every scan stores a content snapshot in SQLite so future scans always have a baseline to compare against
 - **Intelligent scan statuses** — skips LLM calls when content is unchanged; handles first-time scans gracefully
 - **Scan history page** — paginated log of all past scans with expandable LLM summaries
+- **Role-based access** — an administrator account manages websites, Excel/CSV import and database export/import; regular user accounts can only run scans and view history
+- **PDF report export** — export every structured report on the scan history page to a single PDF file
 
 ---
 
@@ -404,8 +406,10 @@ All variables are set in `backend/.env`.
 | Variable | Default | Required | Description |
 |---|---|---|---|
 | `PORT` | `3001` | No | Port the Express server listens on |
-| **`AUTH_USERNAME`** | `admin` | No | Login username |
-| **`AUTH_PASSWORD`** | — | **Yes** | Login password (no default — must be set) |
+| **`AUTH_USERNAME`** | `admin` | No | Administrator login username |
+| **`AUTH_PASSWORD`** | — | **Yes** | Administrator login password (no default — must be set) |
+| `USER_USERNAME` | `user` | No | Regular (non-admin) user login username |
+| `USER_PASSWORD` | — | No | Regular user login password. The user account only exists when this is set |
 | **`JWT_SECRET`** | `change-me-in-production` | **Yes** | Secret used to sign session tokens — use a long random string |
 | **`JWT_EXPIRES_IN`** | `24h` | No | Session duration e.g. `12h`, `7d`, `30d` |
 | `LLM_PROVIDER` | `claude` | Yes | `claude` → Anthropic SDK. Any other value → OpenAI-compatible SDK |
@@ -445,6 +449,24 @@ All variables are set in `backend/.env`.
 
 ## Using the Application
 
+### Roles & permissions
+
+The app has two roles, configured via environment variables (see [Environment Variables](#environment-variables)):
+
+| Action | Administrator | User |
+|---|:---:|:---:|
+| Run scans | ✅ | ✅ |
+| View scan history | ✅ | ✅ |
+| Export reports to PDF | ✅ | ✅ |
+| Add / edit / delete websites | ✅ | — |
+| Import websites from Excel/CSV | ✅ | — |
+| Export websites (`.xlsx`) & export/import the database | ✅ | — |
+
+The administrator account uses `AUTH_USERNAME` / `AUTH_PASSWORD`. A regular user
+account exists only when `USER_PASSWORD` is set (`USER_USERNAME` defaults to
+`user`). Admin-only controls are hidden in the UI for user accounts and enforced
+on the server (the API returns `403` for unauthorized actions).
+
 ### Adding websites
 
 1. Go to the **Dashboard** (default page).
@@ -471,6 +493,8 @@ See [Excel / CSV Import Format](#excel--csv-import-format) for the expected file
 ### Viewing history
 
 Click **Scan History** in the navigation bar to see a paginated log of every scan that has ever been run, with statuses and LLM summaries.
+
+Use **Export reports (PDF)** in the top-right of the page to download all of the structured reports currently in view (the search filter is respected) as a single PDF file.
 
 ---
 
@@ -503,16 +527,20 @@ The file must have a header row. Column names are case-insensitive.
 
 ## API Reference
 
-All endpoints are prefixed with `/api`.
+All endpoints are prefixed with `/api`. All endpoints below (except `/api/health`
+and `/api/auth/*`) require a valid session token. Endpoints marked **admin** also
+require the administrator account and return `403` otherwise.
 
 ### Websites
 
 | Method | Path | Body / Params | Description |
 |---|---|---|---|
 | `GET` | `/api/websites` | — | List all active monitored websites |
-| `POST` | `/api/websites` | `{ url, name? }` | Add a single website |
-| `POST` | `/api/websites/bulk` | `{ websites: [{url, name?}] }` | Add multiple websites at once |
-| `DELETE` | `/api/websites/:id` | — | Remove (deactivate) a website |
+| `POST` | `/api/websites` | `{ url, name? }` | Add a single website **(admin)** |
+| `POST` | `/api/websites/bulk` | `{ websites: [{url, name?}] }` | Add multiple websites at once **(admin)** |
+| `PATCH` | `/api/websites/:id` | `{ use_firecrawl?, use_brave?, use_serper?, remark? }` | Update scraper flags / remark **(admin)** |
+| `DELETE` | `/api/websites/:id` | — | Remove (deactivate) a website **(admin)** |
+| `GET` | `/api/websites/export` | — | Export active websites as `.xlsx` **(admin)** |
 | `GET` | `/api/websites/:id` | — | Get a website with its recent scans |
 
 ### Scans
@@ -521,6 +549,7 @@ All endpoints are prefixed with `/api`.
 |---|---|---|---|
 | `POST` | `/api/scans` | `{ websiteIds: number[], periodDays: number }` | Trigger a scan |
 | `GET` | `/api/scans` | `?limit=20&offset=0` | Paginated scan history |
+| `GET` | `/api/scans/export-pdf` | `?ids=1,2,3` (optional) | Export scan reports as a single PDF (all reports when `ids` omitted) |
 | `GET` | `/api/scans/:id` | — | Single scan result |
 | `GET` | `/api/scans/website/:websiteId` | — | All scans for one website |
 
@@ -528,7 +557,7 @@ All endpoints are prefixed with `/api`.
 
 | Method | Path | Body | Description |
 |---|---|---|---|
-| `POST` | `/api/upload` | `multipart/form-data` field `file` | Parse an Excel/CSV file and return `{ count, websites }` |
+| `POST` | `/api/upload` | `multipart/form-data` field `file` | Parse an Excel/CSV file and return `{ count, websites }` **(admin)** |
 
 ### Utility
 

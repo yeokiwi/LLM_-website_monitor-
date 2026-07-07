@@ -22,4 +22,17 @@ function requireAuth(req, res, next) {
   }
 }
 
-module.exports = { requireAuth };
+/**
+ * Express middleware — restricts a route to the administrator account.
+ * Must run after `requireAuth`. Returns 403 for non-admin (regular user)
+ * accounts. Admin-only actions include adding/editing websites, importing
+ * from Excel/CSV, and exporting/importing the database.
+ */
+function requireAdmin(req, res, next) {
+  if (!req.user || req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Administrator privileges required for this action' });
+  }
+  next();
+}
+
+module.exports = { requireAuth, requireAdmin };

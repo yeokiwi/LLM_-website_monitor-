@@ -4,8 +4,56 @@ const { scrapeWebsite, scrapeWithProvider, scrapePdf, isPdfUrl } = require('../s
 const { saveSnapshot, findBaselineSnapshot, getPreviousSnapshot, getSnapshot } = require('../services/snapshotService');
 const { computeDiff } = require('../services/diffService');
 const { summarizeChanges } = require('../services/llmService');
+const { buildReportsPdf } = require('../services/reportPdf');
 
 const router = express.Router();
+
+// ---------------------------------------------------------------------------
+// GET /api/scans/export-pdf — export every scan report as one PDF file
+//
+// Available to any authenticated user (scanning + viewing history). Optionally
+// accepts `?ids=1,2,3` to export a specific subset (e.g. the filtered view on
+// the history page); when omitted, all scan reports are exported.
+//
+// NOTE: must be declared before `GET /:id` so the literal path is not captured
+// by the `:id` parameter route.
+// ---------------------------------------------------------------------------
+router.get('/export-pdf', async (req, res) => {
+  const baseQuery = `
+    SELECT sr.*, w.url, w.name, w.domain, w.srms_owner, w.srms
+    FROM scan_results sr
+    JOIN websites w ON sr.website_id = w.id
+  `;
+
+  let scans;
+  const idsParam = (req.query.ids || '').trim();
+  if (idsParam) {
+    const ids = idsParam
+      .split(',')
+      .map((x) => parseInt(x, 10))
+      .filter((n) => Number.isInteger(n));
+    if (ids.length === 0) {
+      return res.status(400).json({ error: 'No valid scan ids provided' });
+    }
+    const placeholders = ids.map(() => '?').join(',');
+    scans = db
+      .prepare(`${baseQuery} WHERE sr.id IN (${placeholders}) ORDER BY sr.scanned_at DESC`)
+      .all(...ids);
+  } else {
+    scans = db.prepare(`${baseQuery} ORDER BY sr.scanned_at DESC`).all();
+  }
+
+  try {
+    const pdf = await buildReportsPdf(scans);
+    const filename = `scan-reports-${new Date().toISOString().slice(0, 10)}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(pdf);
+  } catch (err) {
+    console.error('Failed to build reports PDF:', err);
+    res.status(500).json({ error: 'Failed to generate PDF' });
+  }
+});
 
 // ---------------------------------------------------------------------------
 // GET /api/scans — list all scan results (paginated)

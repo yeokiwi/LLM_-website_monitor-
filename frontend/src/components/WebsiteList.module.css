@@ -16,6 +16,7 @@
 .checkCol { width: 40px; }
 .name { font-weight: 500; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .unnamed { color: #9ca3af; }
+.readonlyText { color: #4b5563; font-size: 0.82rem; word-break: break-word; }
 .url a { color: #6366f1; text-decoration: none; word-break: break-all; }
 .url a:hover { text-decoration: underline; }
 .center { text-align: center; }

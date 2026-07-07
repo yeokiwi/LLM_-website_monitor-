@@ -9,7 +9,7 @@ import { getWebsites, deleteWebsite, bulkDeleteWebsites, updateWebsite, bulkUpda
 import { useScan } from '../context/ScanContext';
 import s from './Dashboard.module.css';
 
-export default function Dashboard() {
+export default function Dashboard({ isAdmin = false }) {
   const [websites, setWebsites] = useState([]);
   const [selected, setSelected] = useState([]);
   const [period, setPeriod]     = useState(30);
@@ -100,16 +100,18 @@ export default function Dashboard() {
 
   return (
     <div className={s.page}>
-      {/* Add websites section */}
-      <section className={s.card}>
-        <h2 className={s.sectionTitle}>Add Websites</h2>
-        <div className={s.addRow}>
-          <AddWebsiteForm onAdded={(w) => { setWebsites((prev) => [w, ...prev.filter((x) => x.id !== w.id)]); }} />
-        </div>
-        <div className={s.divider}>or</div>
-        <ExcelUpload onImported={loadWebsites} />
-        <DataBackup onImported={loadWebsites} />
-      </section>
+      {/* Add websites section — administrator only */}
+      {isAdmin && (
+        <section className={s.card}>
+          <h2 className={s.sectionTitle}>Add Websites</h2>
+          <div className={s.addRow}>
+            <AddWebsiteForm onAdded={(w) => { setWebsites((prev) => [w, ...prev.filter((x) => x.id !== w.id)]); }} />
+          </div>
+          <div className={s.divider}>or</div>
+          <ExcelUpload onImported={loadWebsites} />
+          <DataBackup onImported={loadWebsites} />
+        </section>
+      )}
 
       {/* Website list + scan controls */}
       <section className={s.card}>
@@ -117,14 +119,16 @@ export default function Dashboard() {
           <h2 className={s.sectionTitle}>Monitored Websites ({websites.length})</h2>
           <div className={s.controls}>
             <PeriodSelector value={period} onChange={setPeriod} />
-            <button
-              className={s.deleteSelectedBtn}
-              onClick={handleDeleteSelected}
-              disabled={scanning || selected.length === 0}
-              title="Remove selected websites"
-            >
-              Delete Selected ({selected.length})
-            </button>
+            {isAdmin && (
+              <button
+                className={s.deleteSelectedBtn}
+                onClick={handleDeleteSelected}
+                disabled={scanning || selected.length === 0}
+                title="Remove selected websites"
+              >
+                Delete Selected ({selected.length})
+              </button>
+            )}
             <button
               className={s.scanBtn}
               onClick={handleScan}
@@ -158,6 +162,7 @@ export default function Dashboard() {
         <WebsiteList
           websites={websites}
           selected={selected}
+          canManage={isAdmin}
           onToggle={handleToggle}
           onSelectAll={setSelected}
           onDelete={handleDelete}

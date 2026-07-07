@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import ScanResultCard from '../components/ScanResultCard';
-import { getScans } from '../api/client';
+import { getScans, exportScansPdf, downloadBlob } from '../api/client';
 import s from './History.module.css';
 
 const PAGE_SIZE = 10;
@@ -17,6 +17,8 @@ export default function History() {
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('date');
   const [sortDir, setSortDir] = useState('desc');
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -97,14 +99,42 @@ export default function History() {
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
   const pageItems = filteredSorted.slice(offset, offset + PAGE_SIZE);
 
+  // Export every structured report currently in view (respects the search
+  // filter) to a single PDF file.
+  async function handleExportPdf() {
+    setExportError('');
+    setExporting(true);
+    try {
+      const ids = filteredSorted.map((scan) => scan.id).filter(Boolean);
+      const res = await exportScansPdf(ids);
+      downloadBlob(res, 'scan-reports.pdf');
+    } catch {
+      setExportError('Failed to export reports to PDF');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div className={s.page}>
       <div className={s.header}>
         <h1 className={s.title}>Scan History</h1>
-        <span className={s.count}>
-          {search ? `${filteredTotal} of ${total}` : total} scan(s)
-        </span>
+        <div className={s.headerRight}>
+          <span className={s.count}>
+            {search ? `${filteredTotal} of ${total}` : total} scan(s)
+          </span>
+          <button
+            className={s.exportBtn}
+            onClick={handleExportPdf}
+            disabled={exporting || filteredTotal === 0}
+            title="Export all reports in view to a single PDF"
+          >
+            {exporting ? 'Exporting…' : '📄 Export reports (PDF)'}
+          </button>
+        </div>
       </div>
+
+      {exportError && <p className={s.error}>{exportError}</p>}
 
       <div className={s.controls}>
         <input

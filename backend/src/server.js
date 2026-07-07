@@ -12,7 +12,7 @@ const scansRouter = require('./routes/scans');
 const uploadRouter = require('./routes/upload');
 const databaseRouter = require('./routes/database');
 const authRouter = require('./routes/auth');
-const { requireAuth } = require('./middleware/auth');
+const { requireAuth, requireAdmin } = require('./middleware/auth');
 const { getLLMInfo } = require('./services/llmService');
 const { resolveScraperProvider } = require('./services/scraper');
 
@@ -46,11 +46,14 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Protected — all routes below require a valid JWT
+// Protected — all routes below require a valid JWT. Website management,
+// Excel/CSV import and database export/import are further restricted to the
+// administrator account (see requireAdmin on the individual website routes and
+// the whole upload/database routers below).
 app.use('/api/websites', requireAuth, websitesRouter);
 app.use('/api/scans',    requireAuth, scansRouter);
-app.use('/api/upload',   requireAuth, uploadRouter);
-app.use('/api/database', requireAuth, databaseRouter);
+app.use('/api/upload',   requireAuth, requireAdmin, uploadRouter);
+app.use('/api/database', requireAuth, requireAdmin, databaseRouter);
 
 // Website-specific scans shortcut
 app.use('/api/websites/:websiteId/scans', requireAuth, (req, res, next) => {

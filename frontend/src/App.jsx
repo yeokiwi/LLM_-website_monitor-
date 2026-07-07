@@ -12,8 +12,9 @@ import styles from './App.module.css';
 // ---------------------------------------------------------------------------
 // Inner shell — consumes ScanContext for the header indicator
 // ---------------------------------------------------------------------------
-function AppShell({ user, health, onLogout }) {
+function AppShell({ user, role, health, onLogout }) {
   const { scanning, progress } = useScan();
+  const isAdmin = role === 'admin';
 
   return (
     <div className={styles.app}>
@@ -58,7 +59,10 @@ function AppShell({ user, health, onLogout }) {
             )}
 
             <div className={styles.userInfo}>
-              <span className={styles.userName}>{user}</span>
+              <span className={styles.userName}>
+                {user}
+                <span className={styles.roleTag}>{isAdmin ? 'Admin' : 'User'}</span>
+              </span>
               <button className={styles.logoutBtn} onClick={onLogout}>
                 Sign out
               </button>
@@ -69,7 +73,7 @@ function AppShell({ user, health, onLogout }) {
 
       <main className={styles.main}>
         <Routes>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={<Dashboard isAdmin={isAdmin} />} />
           <Route path="/history" element={<History />} />
           <Route path="/report/:id" element={<ReportPage />} />
           <Route path="/help" element={<HelpPage />} />
@@ -84,13 +88,14 @@ function AppShell({ user, health, onLogout }) {
 // ---------------------------------------------------------------------------
 export default function App() {
   const [user, setUser]     = useState(null); // null=loading, false=unauthed, string=username
+  const [role, setRole]     = useState(null); // 'admin' | 'user'
   const [health, setHealth] = useState(null);
 
   useEffect(() => {
     const token = getStoredToken();
     if (!token) { setUser(false); return; }
     getMe()
-      .then((data) => setUser(data.username))
+      .then((data) => { setUser(data.username); setRole(data.role || 'admin'); })
       .catch(() => { clearSession(); setUser(false); });
   }, []);
 
@@ -101,14 +106,16 @@ export default function App() {
       .catch(() => setHealth({ status: 'error' }));
   }, [user]);
 
-  function handleLogin(token, username) {
-    storeSession(token, username);
+  function handleLogin(token, username, loginRole) {
+    storeSession(token, username, loginRole);
     setUser(username);
+    setRole(loginRole || 'admin');
   }
 
   function handleLogout() {
     clearSession();
     setUser(false);
+    setRole(null);
     setHealth(null);
   }
 
@@ -117,7 +124,7 @@ export default function App() {
 
   return (
     <ScanProvider>
-      <AppShell user={user} health={health} onLogout={handleLogout} />
+      <AppShell user={user} role={role} health={health} onLogout={handleLogout} />
     </ScanProvider>
   );
 }
