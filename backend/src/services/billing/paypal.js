@@ -168,21 +168,19 @@ async function verifyWebhook(body, headers) {
 
 /** Resolve the account an event belongs to, via custom_id then subscription id. */
 function resolveUserId(resource) {
-  const customId = resource?.custom_id || resource?.billing_agreement_id;
-
+  // Subscriptions carry our own user id, set when checkout was created.
   if (resource?.custom_id) {
     const user = userRepo.findById(parseInt(resource.custom_id, 10));
     if (user) return user.id;
   }
 
-  const subId = resource?.id || resource?.billing_agreement_id;
-  const existing = subscriptionRepo.findByProviderSubId('paypal', subId);
-  if (existing) return existing.user_id;
-
-  // PAYMENT.SALE.* carries the subscription id under billing_agreement_id.
-  if (customId && customId !== resource?.custom_id) {
-    const bySub = subscriptionRepo.findByProviderSubId('paypal', customId);
-    if (bySub) return bySub.user_id;
+  // Otherwise match the subscription we already stored. Note the two shapes:
+  // a BILLING.SUBSCRIPTION.* resource is keyed by `id`, while a PAYMENT.SALE.*
+  // resource uses `id` for the sale and names its subscription in
+  // `billing_agreement_id` — so that one is tried first.
+  for (const candidate of [resource?.billing_agreement_id, resource?.id]) {
+    const existing = subscriptionRepo.findByProviderSubId('paypal', candidate);
+    if (existing) return existing.user_id;
   }
 
   return null;

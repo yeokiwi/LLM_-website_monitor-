@@ -191,8 +191,11 @@ function listForExport(ownerId) {
 /**
  * Deactivate the owner's newest websites until only `keep` remain active.
  *
- * Used when a downgrade drops the allowance below current usage. Data is never
- * deleted — the sites are simply parked, and re-upgrading brings them back.
+ * Used when a downgrade drops the allowance below current usage. The oldest
+ * sites are kept because they are the ones with accumulated snapshot history —
+ * losing those loses the comparisons the product exists to make. Data is never
+ * deleted; the sites are parked, and re-upgrading lets the owner bring them
+ * back.
  */
 function deactivateOverLimit(ownerId, keep) {
   if (keep === null || keep === undefined) return 0;
@@ -203,7 +206,7 @@ function deactivateOverLimit(ownerId, keep) {
         WHERE id IN (
           SELECT id FROM websites
            WHERE owner_id = ? AND is_active = 1
-           ORDER BY created_at DESC
+           ORDER BY created_at ASC, id ASC
            LIMIT -1 OFFSET ?
         )`
     )

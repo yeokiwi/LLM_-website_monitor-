@@ -1,0 +1,33 @@
+# Docker does not honour .gitignore, so anything that must stay out of the
+# image has to be listed here too.
+
+# Secrets. `COPY backend/ ./` would otherwise bake a local .env into the image.
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Dependencies are installed inside the image
+**/node_modules
+
+# Local database files
+**/data
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/*.bak-*
+
+# Build output (the frontend is built in its own stage)
+frontend/dist
+backend/public
+
+# Not needed at runtime
+**/tests
+**/vitest.config.*
+.github
+.git
+.gitignore
+README.md
+*.md
+.vscode
+.idea
+**/.DS_Store

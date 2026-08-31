@@ -13,6 +13,8 @@ const TOC = [
   { id: 'scan-results',   label: 'Understanding Results' },
   { id: 'reports',        label: 'Change Reports' },
   { id: 'history',        label: 'Scan History' },
+  { id: 'schedules',      label: 'Automatic Scans' },
+  { id: 'plans',          label: 'Plans & Billing' },
   { id: 'configuration',  label: 'Configuration' },
   { id: 'faq',            label: 'FAQ' },
 ];
@@ -161,8 +163,13 @@ export default function HelpPage() {
             </div>
             <div className={s.featureCard}>
               <span className={s.featureIcon}>🔒</span>
-              <strong>Authentication</strong>
-              <p>Username/password login with JWT sessions keeps your monitoring data private.</p>
+              <strong>Your own workspace</strong>
+              <p>Your websites and scan history belong to your account alone — no other account can see them.</p>
+            </div>
+            <div className={s.featureCard}>
+              <span className={s.featureIcon}>⏱️</span>
+              <strong>Automatic scans</strong>
+              <p>On a paid plan, sites are checked hourly, daily or weekly and you get an email when something changes.</p>
             </div>
           </div>
         </Section>
@@ -171,9 +178,11 @@ export default function HelpPage() {
 
         {/* ── 2. Getting Started ──────────────────────────────────────────── */}
         <Section id="getting-started" icon="🚀" title="Getting Started">
-          <Step n={1} title="Log in">
-            Open the app in your browser. You'll see the login screen. Enter the
-            credentials configured by your administrator (default username: <code className={s.code}>admin</code>).
+          <Step n={1} title="Create your account">
+            Open the app and click <strong>Create an account</strong>. Sign up with your
+            email address and a password of at least 10 characters. You start on the
+            free plan straight away — no card needed. Confirm your email address when
+            the message arrives so we can send you change alerts later.
           </Step>
 
           <Step n={2} title="Add your first website">
@@ -196,7 +205,7 @@ export default function HelpPage() {
           </Step>
 
           <Callout type="tip">
-            Sessions last 24 hours by default. You'll be redirected to the login page automatically
+            Sessions last 24 hours by default. You'll be redirected to the sign-in page automatically
             when your session expires.
           </Callout>
         </Section>
@@ -425,7 +434,7 @@ export default function HelpPage() {
             <li>10 results per page. Use <strong>Previous</strong> / <strong>Next</strong> to navigate.</li>
             <li>The total scan count is shown above the results.</li>
             <li>Each card behaves identically to the Dashboard cards — click to expand, use the report link.</li>
-            <li>History is never automatically deleted; it accumulates as an audit trail.</li>
+            <li>How long history is kept depends on your plan — 30 days on Free, a year on Pro, indefinitely on Business.</li>
           </ul>
 
           <Callout type="info">
@@ -437,19 +446,138 @@ export default function HelpPage() {
 
         <hr className={s.divider} />
 
-        {/* ── 8. Configuration ────────────────────────────────────────────── */}
+        {/* ── 8. Automatic Scans ──────────────────────────────────────────── */}
+        <Section id="schedules" icon="⏱️" title="Automatic Scans">
+          <p className={s.p}>
+            On a paid plan you can have a site checked on a schedule instead of
+            clicking <strong>Scan Selected</strong> yourself. Open the{' '}
+            <Link to="/schedules" className={s.link}>Schedules</Link> page and pick a
+            cadence for each website.
+          </p>
+
+          <div className={s.envTable}>
+            <div className={s.envRow}><code className={s.envKey}>Manual only</code><span>The default. Nothing runs unless you click Scan.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>Every week</code><span>Pro and Business</span></div>
+            <div className={s.envRow}><code className={s.envKey}>Every day</code><span>Pro and Business</span></div>
+            <div className={s.envRow}><code className={s.envKey}>Every hour</code><span>Business</span></div>
+          </div>
+
+          <p className={s.p}>
+            When a scheduled scan finds something, you get an email with the summary
+            and a link to the full report. Turn that off any time under{' '}
+            <Link to="/account/billing" className={s.link}>Account &amp; billing</Link>.
+          </p>
+
+          <Callout type="info">
+            Scheduled scans use the same monthly allowance as manual ones. If the
+            allowance runs out, scheduled runs pause until it resets rather than
+            failing — you'll get one email letting you know.
+          </Callout>
+
+          <Callout type="tip">
+            Turning a schedule on does not scan immediately. The first automatic run
+            happens one interval later, so switching on a daily schedule won't spend
+            a scan the moment you click.
+          </Callout>
+        </Section>
+
+        <hr className={s.divider} />
+
+        {/* ── 9. Plans & Billing ──────────────────────────────────────────── */}
+        <Section id="plans" icon="💳" title="Plans & Billing">
+          <p className={s.p}>
+            Everyone starts on the free plan. Paid plans raise the limits and unlock
+            automatic scans, premium sources and exports. Compare them on the{' '}
+            <Link to="/pricing" className={s.link}>Plans</Link> page.
+          </p>
+
+          <h3 className={s.subTitle}>What each plan includes</h3>
+          <div className={s.envTable}>
+            <div className={s.envRow}><code className={s.envKey}>Free</code><span>3 websites · 10 scans a month · direct scraping · manual scans · 30 days of history</span></div>
+            <div className={s.envRow}><code className={s.envKey}>Pro</code><span>25 websites · 300 scans a month · Firecrawl, Brave and Serper · weekly and daily schedules · email alerts · PDF export · a year of history</span></div>
+            <div className={s.envRow}><code className={s.envKey}>Business</code><span>200 websites · 2000 scans a month · hourly schedules · spreadsheet import/export · full data export · unlimited history</span></div>
+          </div>
+
+          <h3 className={s.subTitle}>Paying</h3>
+          <p className={s.p}>
+            Checkout is handled by Stripe or PayPal, whichever you prefer — card
+            details never reach this application. On a card subscription you can
+            change plan, update your card or cancel from{' '}
+            <Link to="/account/billing" className={s.link}>Account &amp; billing</Link>,
+            which opens Stripe's own portal.
+          </p>
+
+          <h3 className={s.subTitle}>Keeping an eye on usage</h3>
+          <p className={s.p}>
+            The header shows how many scans you have used this period. The billing
+            page breaks it down further, including how many AI analyses and source
+            fetches your account has made.
+          </p>
+
+          <Callout type="info">
+            If you cancel, you keep your plan until the end of the period you have
+            already paid for.
+          </Callout>
+
+          <Callout type="warning">
+            Moving to a smaller plan never deletes anything. If you have more
+            websites than the new plan allows, the newest ones are paused — their
+            history stays intact, and upgrading again lets you switch them back on.
+            The oldest sites are kept because they have the most history to compare
+            against.
+          </Callout>
+        </Section>
+
+        <hr className={s.divider} />
+
+        {/* ── 10. Configuration ───────────────────────────────────────────── */}
         <Section id="configuration" icon="⚙️" title="Configuration">
+          <Callout type="info">
+            This section is for whoever <em>runs</em> the service. If you are just
+            using it, nothing here applies — your account settings live under{' '}
+            <Link to="/account/billing" className={s.link}>Account &amp; billing</Link>.
+          </Callout>
+
           <p className={s.p}>
             All configuration is done via environment variables in <code className={s.code}>backend/.env</code>.
             Copy <code className={s.code}>backend/.env.example</code> as a starting point.
           </p>
 
-          <h3 className={s.subTitle}>Authentication</h3>
+          <h3 className={s.subTitle}>Accounts</h3>
+          <p className={s.p}>
+            Customer accounts live in the database — people sign up for themselves.
+            The only credentials in the environment are the platform administrator's,
+            seeded on first boot.
+          </p>
           <div className={s.envTable}>
-            <div className={s.envRow}><code className={s.envKey}>AUTH_USERNAME</code><span>Login username. Default: <code className={s.code}>admin</code></span></div>
-            <div className={s.envRow}><code className={s.envKey}>AUTH_PASSWORD</code><span><strong>Required.</strong> Login password. No default.</span></div>
-            <div className={s.envRow}><code className={s.envKey}>JWT_SECRET</code><span>Secret used to sign tokens. Use a long random string in production.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>APP_URL</code><span>Public URL of the app. Used for email links, payment redirects and the allowed CORS origin.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>AUTH_USERNAME</code><span>Platform administrator login. A bare name becomes <code className={s.code}>name@local</code>.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>AUTH_PASSWORD</code><span><strong>Required.</strong> Seeds the administrator on first boot only — changing it later does not change the stored password.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>JWT_SECRET</code><span>Secret used to sign tokens. The server refuses to start in production if this is unset or left at its default.</span></div>
             <div className={s.envRow}><code className={s.envKey}>JWT_EXPIRES_IN</code><span>Session lifetime. Default: <code className={s.code}>24h</code>. Examples: <code className={s.code}>7d</code>, <code className={s.code}>30d</code></span></div>
+          </div>
+
+          <h3 className={s.subTitle}>Billing</h3>
+          <p className={s.p}>
+            With neither gateway configured the app still runs — everyone stays on
+            the free plan and the Plans page says paid plans are unavailable. Plan
+            limits themselves live in <code className={s.code}>backend/src/config/plans.js</code>.
+          </p>
+          <div className={s.envTable}>
+            <div className={s.envRow}><code className={s.envKey}>STRIPE_SECRET_KEY</code><span>Stripe API secret key.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>STRIPE_WEBHOOK_SECRET</code><span>Signing secret for <code className={s.code}>/api/billing/webhooks/stripe</code>.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>STRIPE_PRICE_PRO</code><span>Recurring price id for the Pro plan (and <code className={s.code}>_BUSINESS</code> for Business).</span></div>
+            <div className={s.envRow}><code className={s.envKey}>PAYPAL_CLIENT_ID</code><span>REST app credentials (with <code className={s.code}>PAYPAL_CLIENT_SECRET</code>).</span></div>
+            <div className={s.envRow}><code className={s.envKey}>PAYPAL_WEBHOOK_ID</code><span>Webhook id, used to verify incoming events.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>PAYPAL_PLAN_PRO</code><span>Billing plan id for Pro (and <code className={s.code}>_BUSINESS</code> for Business).</span></div>
+            <div className={s.envRow}><code className={s.envKey}>BILLING_GRACE_DAYS</code><span>Days a subscriber keeps their plan after a failed payment. Default: <code className={s.code}>7</code></span></div>
+          </div>
+
+          <h3 className={s.subTitle}>Scheduling &amp; email</h3>
+          <div className={s.envTable}>
+            <div className={s.envRow}><code className={s.envKey}>ENABLE_SCHEDULER</code><span>Run background scans. On by default in production, off elsewhere.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>SMTP_HOST</code><span>Outgoing mail server. Without it, messages are logged rather than sent.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>SMTP_USER</code><span>With <code className={s.code}>SMTP_PORT</code>, <code className={s.code}>SMTP_PASS</code> and <code className={s.code}>SMTP_FROM</code>.</span></div>
           </div>
 
           <Callout type="warning">
@@ -537,11 +665,52 @@ export default function HelpPage() {
           </details>
 
           <details className={s.faq}>
-            <summary className={s.faqQ}>How do I change the login credentials?</summary>
+            <summary className={s.faqQ}>How do I change my password?</summary>
             <p className={s.faqA}>
-              Update <code className={s.code}>AUTH_USERNAME</code> and <code className={s.code}>AUTH_PASSWORD</code> in
-              your <code className={s.code}>backend/.env</code> file and restart the server. Existing
-              JWT tokens will still work until they expire (default 24h).
+              Go to <Link to="/account/billing" className={s.link}>Account &amp; billing</Link> and
+              click <strong>Change password</strong>. If you cannot sign in at all, use
+              <strong> Forgot your password?</strong> on the sign-in screen — the reset link
+              is valid for one hour.
+            </p>
+          </details>
+
+          <details className={s.faq}>
+            <summary className={s.faqQ}>Can anyone else see the sites I monitor?</summary>
+            <p className={s.faqA}>
+              No. Your websites, snapshots and reports belong to your account alone.
+              Two accounts can monitor the same URL without ever seeing each other's
+              history, and the server rejects any request for data that is not yours.
+            </p>
+          </details>
+
+          <details className={s.faq}>
+            <summary className={s.faqQ}>I hit a limit and got an upgrade prompt — what counts against it?</summary>
+            <p className={s.faqA}>
+              Two things are metered: how many websites you monitor at once, and how
+              many scans you run per period. One scan of one website counts as one,
+              whether you triggered it yourself or a schedule did. Scans that find no
+              changes still count, because the site still had to be fetched. The
+              header shows what you have left.
+            </p>
+          </details>
+
+          <details className={s.faq}>
+            <summary className={s.faqQ}>What happens to my data if I downgrade or cancel?</summary>
+            <p className={s.faqA}>
+              Nothing is deleted. If you have more websites than the new plan allows,
+              the newest ones are paused and the oldest kept, because those have the
+              most history to compare against. Upgrade again and you can switch the
+              paused ones back on. If you cancel, you keep your plan until the end of
+              the period you have already paid for.
+            </p>
+          </details>
+
+          <details className={s.faq}>
+            <summary className={s.faqQ}>Why did my scan use plain scraping instead of Firecrawl or Brave?</summary>
+            <p className={s.faqA}>
+              Premium sources are part of the paid plans. On the free plan a scan
+              falls back to direct page scraping rather than failing, so it still
+              works — just with a narrower view of the site.
             </p>
           </details>
 
@@ -568,10 +737,12 @@ export default function HelpPage() {
           <details className={s.faq}>
             <summary className={s.faqQ}>How is my data stored?</summary>
             <p className={s.faqA}>
-              Everything is stored locally in a SQLite database file at the path set by
+              Everything is stored in a SQLite database on the server, at the path set by
               <code className={s.code}> DB_PATH</code> (default <code className={s.code}>backend/data/monitor.db</code>).
-              No data is sent anywhere except to the LLM API you configure and (optionally) the
-              Firecrawl, Brave, or Serper Search API.
+              Content leaves it only to reach the configured LLM API and, optionally, the
+              Firecrawl, Brave or Serper Search API. Payment details are handled entirely
+              by Stripe or PayPal and never reach this application — it stores only the
+              subscription's status and an amount for your receipts.
             </p>
           </details>
 
