@@ -12,10 +12,10 @@
 .headerInner {
   max-width: 1200px;
   margin: 0 auto;
-  height: 56px;
+  min-height: 56px;
   display: flex;
   align-items: center;
-  gap: 32px;
+  gap: 24px;
 }
 .logo {
   font-size: 1.1rem;
@@ -26,10 +26,11 @@
   text-decoration: none;
 }
 
-.nav { display: flex; gap: 8px; }
+.nav { display: flex; gap: 8px; flex-shrink: 0; }
 .nav a {
   color: rgba(255,255,255,0.7);
   text-decoration: none;
+  white-space: nowrap;
   padding: 6px 14px;
   border-radius: 6px;
   font-size: 0.9rem;
@@ -123,6 +124,13 @@
 
 .userName:hover { color: #fff; }
 
+.userLabel {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .roleTag {
   font-size: 0.66rem;
   font-weight: 600;
@@ -135,6 +143,7 @@
 }
 
 .logoutBtn {
+  white-space: nowrap;
   padding: 5px 12px;
   background: rgba(255,255,255,0.1);
   border: 1px solid rgba(255,255,255,0.2);

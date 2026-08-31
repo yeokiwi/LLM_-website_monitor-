@@ -107,8 +107,10 @@ function AppShell({ children }) {
             )}
 
             <div className={styles.userInfo}>
-              <NavLink to="/account/billing" className={styles.userName}>
-                {user?.name || user?.email}
+              <NavLink to="/account/billing" className={styles.userName} title={user?.email}>
+                {/* Truncated in CSS — a long email would otherwise wrap the
+                    whole header onto two lines. */}
+                <span className={styles.userLabel}>{user?.name || user?.email}</span>
                 <span className={styles.roleTag}>{plan?.name || 'Free'}</span>
               </NavLink>
               <button className={styles.logoutBtn} onClick={logout}>
