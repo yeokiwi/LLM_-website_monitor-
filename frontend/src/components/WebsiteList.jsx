@@ -81,6 +81,12 @@ export default function WebsiteList({
   websites,
   selected,
   canManage = true,
+  /**
+   * Scraper engines the current plan includes. An engine outside this list is
+   * shown disabled rather than hidden, so the customer can see what upgrading
+   * would give them. The server enforces the same list regardless.
+   */
+  allowedEngines = ['direct', 'firecrawl', 'brave', 'serper'],
   onToggle,
   onSelectAll,
   onDelete,
@@ -88,6 +94,7 @@ export default function WebsiteList({
   onToggleScraperAll,
   onSaveRemark,
 }) {
+  const engineAllowed = (engine) => allowedEngines.includes(engine);
   const [sortBy, setSortBy] = useState(null);
   const [sortDir, setSortDir] = useState('asc');
 
@@ -161,33 +168,22 @@ export default function WebsiteList({
             <th className={s.scraperHead}>
               <span className={s.scraperHeadTitle}>Scrape with</span>
               <div className={s.scraperHeadGroup}>
-                {canManage ? (
-                  <>
+                {[
+                  ['firecrawl', 'use_firecrawl', 'Firecrawl'],
+                  ['brave', 'use_brave', 'Brave'],
+                  ['serper', 'use_serper', 'Serper'],
+                ].map(([engine, field, label]) =>
+                  canManage && engineAllowed(engine) ? (
                     <ScraperAllCheckbox
-                      label="Firecrawl"
-                      field="use_firecrawl"
+                      key={engine}
+                      label={label}
+                      field={field}
                       websites={websites}
                       onToggleScraperAll={onToggleScraperAll}
                     />
-                    <ScraperAllCheckbox
-                      label="Brave"
-                      field="use_brave"
-                      websites={websites}
-                      onToggleScraperAll={onToggleScraperAll}
-                    />
-                    <ScraperAllCheckbox
-                      label="Serper"
-                      field="use_serper"
-                      websites={websites}
-                      onToggleScraperAll={onToggleScraperAll}
-                    />
-                  </>
-                ) : (
-                  <>
-                    <span className={s.scraperOption}>Firecrawl</span>
-                    <span className={s.scraperOption}>Brave</span>
-                    <span className={s.scraperOption}>Serper</span>
-                  </>
+                  ) : (
+                    <span key={engine} className={s.scraperOptionLocked}>{label}</span>
+                  )
                 )}
               </div>
             </th>
@@ -223,33 +219,31 @@ export default function WebsiteList({
                 </a>
               </td>
               <td className={s.scraperCell}>
-                <label className={s.scraperOption}>
-                  <input
-                    type="checkbox"
-                    checked={!!w.use_firecrawl}
-                    disabled={!canManage}
-                    onChange={(e) => onToggleScraper?.(w.id, 'use_firecrawl', e.target.checked)}
-                  />
-                  Firecrawl
-                </label>
-                <label className={s.scraperOption}>
-                  <input
-                    type="checkbox"
-                    checked={!!w.use_brave}
-                    disabled={!canManage}
-                    onChange={(e) => onToggleScraper?.(w.id, 'use_brave', e.target.checked)}
-                  />
-                  Brave
-                </label>
-                <label className={s.scraperOption}>
-                  <input
-                    type="checkbox"
-                    checked={!!w.use_serper}
-                    disabled={!canManage}
-                    onChange={(e) => onToggleScraper?.(w.id, 'use_serper', e.target.checked)}
-                  />
-                  Serper
-                </label>
+                {[
+                  ['firecrawl', 'use_firecrawl', 'Firecrawl'],
+                  ['brave', 'use_brave', 'Brave'],
+                  ['serper', 'use_serper', 'Serper'],
+                ].map(([engine, field, label]) => {
+                  const locked = !engineAllowed(engine);
+                  return (
+                    <label
+                      key={engine}
+                      className={locked ? s.scraperOptionLocked : s.scraperOption}
+                      title={locked ? `${label} is not included in your plan` : undefined}
+                    >
+                      <input
+                        type="checkbox"
+                        // A locked engine shows unchecked even when the stored
+                        // flag is on: the scan will fall back to a direct
+                        // scrape, and a ticked box would claim otherwise.
+                        checked={!!w[field] && !locked}
+                        disabled={!canManage || locked}
+                        onChange={(e) => onToggleScraper?.(w.id, field, e.target.checked)}
+                      />
+                      {label}
+                    </label>
+                  );
+                })}
               </td>
               <td className={s.center}>{w.snapshot_count ?? 0}</td>
               <td className={s.date}>

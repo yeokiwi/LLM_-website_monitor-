@@ -22,7 +22,11 @@ export default function ExcelUpload({ onImported }) {
       const data = await uploadExcel(file);
       setPreview(data);
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to parse file');
+      // A 402 already opens the shared upgrade prompt; repeating it inline
+      // would say the same thing twice.
+      if (err.response?.status !== 402) {
+        setError(err.response?.data?.error || 'Failed to parse file');
+      }
     } finally {
       setLoading(false);
       e.target.value = '';
@@ -40,7 +44,11 @@ export default function ExcelUpload({ onImported }) {
       setPreview(null);
       onImported();
     } catch (err) {
-      setError(err.response?.data?.error || 'Import failed');
+      // The batch can exceed the plan's website allowance; that 402 opens the
+      // shared upgrade prompt rather than an inline error.
+      if (err.response?.status !== 402) {
+        setError(err.response?.data?.error || 'Import failed');
+      }
     } finally {
       setImporting(false);
     }

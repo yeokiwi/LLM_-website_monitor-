@@ -104,3 +104,51 @@
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+/* Shared by every account page: sign in, sign up, reset, verify. */
+.meta {
+  font-size: 0.85rem;
+  color: #6b7280;
+  margin: 14px 0 0;
+  text-align: center;
+}
+
+.link {
+  color: #6366f1;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.optional {
+  font-weight: 400;
+  color: #9ca3af;
+}
+
+.help {
+  font-size: 0.78rem;
+  color: #9ca3af;
+  margin: 2px 0 0;
+}
+
+.notice {
+  font-size: 0.85rem;
+  color: #065f46;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 0;
+  width: 100%;
+  text-align: center;
+}
+
+.status {
+  font-size: 0.9rem;
+  color: #4b5563;
+  text-align: center;
+  margin: 8px 0 0;
+}

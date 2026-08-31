@@ -17,7 +17,14 @@
   align-items: center;
   gap: 32px;
 }
-.logo { font-size: 1.1rem; font-weight: 700; letter-spacing: -0.3px; flex-shrink: 0; }
+.logo {
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  flex-shrink: 0;
+  color: #fff;
+  text-decoration: none;
+}
 
 .nav { display: flex; gap: 8px; }
 .nav a {
@@ -110,7 +117,11 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  text-decoration: none;
+  transition: color 0.15s;
 }
+
+.userName:hover { color: #fff; }
 
 .roleTag {
   font-size: 0.66rem;
@@ -145,3 +156,26 @@
   font-size: 0.95rem;
   color: #9ca3af;
 }
+
+/* Public header (pricing page when signed out). */
+.publicLink {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: rgba(255,255,255,0.75);
+  text-decoration: none;
+  padding: 8px 12px;
+}
+
+.publicLink:hover { color: #fff; }
+
+.publicCta {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #fff;
+  background: #6366f1;
+  border-radius: 8px;
+  padding: 8px 16px;
+  text-decoration: none;
+}
+
+.publicCta:hover { background: #4f46e5; }

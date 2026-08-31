@@ -1,32 +1,37 @@
 import React, { useState } from 'react';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { errorMessage } from '../api/client';
 import s from './LoginPage.module.css';
 
-export default function LoginPage() {
+const MIN_PASSWORD_LENGTH = 10;
+
+export default function SignupPage() {
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const { login } = useAuth();
+  const { signup } = useAuth();
   const navigate = useNavigate();
-  const location = useLocation();
-
-  // Return the user to wherever they were headed before the sign-in redirect.
-  const destination = location.state?.from?.pathname || '/';
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
-    setLoading(true);
 
+    // Mirror the server's policy so the user finds out before a round trip.
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+      return;
+    }
+
+    setLoading(true);
     try {
-      await login(email, password);
-      navigate(destination, { replace: true });
+      await signup(email, password, name);
+      navigate('/', { replace: true });
     } catch (err) {
-      setError(errorMessage(err, 'Sign in failed. Please try again.'));
+      setError(errorMessage(err, 'Could not create your account. Please try again.'));
     } finally {
       setLoading(false);
     }
@@ -36,10 +41,22 @@ export default function LoginPage() {
     <div className={s.page}>
       <div className={s.card}>
         <div className={s.logo}>🔍</div>
-        <h1 className={s.title}>Website Monitor</h1>
-        <p className={s.subtitle}>Sign in to continue</p>
+        <h1 className={s.title}>Create your account</h1>
+        <p className={s.subtitle}>Start monitoring on the free plan — no card needed</p>
 
         <form className={s.form} onSubmit={handleSubmit}>
+          <div className={s.field}>
+            <label className={s.label} htmlFor="name">Name <span className={s.optional}>(optional)</span></label>
+            <input
+              id="name"
+              className={s.input}
+              type="text"
+              autoComplete="name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+
           <div className={s.field}>
             <label className={s.label} htmlFor="email">Email</label>
             <input
@@ -47,7 +64,6 @@ export default function LoginPage() {
               className={s.input}
               type="email"
               autoComplete="email"
-              autoFocus
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
@@ -60,25 +76,24 @@ export default function LoginPage() {
               id="password"
               className={s.input}
               type="password"
-              autoComplete="current-password"
+              autoComplete="new-password"
+              minLength={MIN_PASSWORD_LENGTH}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
             />
+            <p className={s.help}>At least {MIN_PASSWORD_LENGTH} characters.</p>
           </div>
 
           {error && <p className={s.error}>{error}</p>}
 
           <button className={s.btn} type="submit" disabled={loading}>
-            {loading ? 'Signing in…' : 'Sign in'}
+            {loading ? 'Creating your account…' : 'Create account'}
           </button>
         </form>
 
         <p className={s.meta}>
-          <Link to="/forgot-password" className={s.link}>Forgot your password?</Link>
-        </p>
-        <p className={s.meta}>
-          New here? <Link to="/signup" className={s.link}>Create an account</Link>
+          Already have an account? <Link to="/login" className={s.link}>Sign in</Link>
         </p>
       </div>
     </div>

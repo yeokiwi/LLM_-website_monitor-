@@ -1,0 +1,55 @@
+/* Sits in the app's dark header, so it borrows the same translucent-on-dark
+   treatment as the health badge beside it. */
+.meter,
+.unlimited {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.8);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+
+.meter:hover,
+.unlimited:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.label {
+  font-variant-numeric: tabular-nums;
+}
+
+.track {
+  width: 54px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  overflow: hidden;
+}
+
+.fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.ok {
+  background: #34d399;
+}
+
+.warn {
+  background: #fbbf24;
+}
+
+.full {
+  background: #f87171;
+}

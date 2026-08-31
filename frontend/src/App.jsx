@@ -1,20 +1,70 @@
 import React, { useEffect, useState } from 'react';
-import { Routes, Route, NavLink } from 'react-router-dom';
+import { Routes, Route, NavLink, Navigate, useLocation, Outlet } from 'react-router-dom';
+
 import Dashboard from './pages/Dashboard';
 import History from './pages/History';
 import LoginPage from './pages/LoginPage';
+import SignupPage from './pages/SignupPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
+import VerifyEmailPage from './pages/VerifyEmailPage';
+import PricingPage from './pages/PricingPage';
+import BillingPage from './pages/BillingPage';
+import SchedulesPage from './pages/SchedulesPage';
+import AdminPage from './pages/AdminPage';
 import ReportPage from './pages/ReportPage';
 import HelpPage from './pages/HelpPage';
+
+import UpgradeModal from './components/UpgradeModal';
+import UsageMeter from './components/UsageMeter';
 import { ScanProvider, useScan } from './context/ScanContext';
-import { getHealth, getMe, storeSession, clearSession, getStoredToken } from './api/client';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { getHealth } from './api/client';
 import styles from './App.module.css';
 
 // ---------------------------------------------------------------------------
-// Inner shell — consumes ScanContext for the header indicator
+// Route guards
 // ---------------------------------------------------------------------------
-function AppShell({ user, role, health, onLogout }) {
+
+/** Requires a signed-in account; remembers where the user was headed. */
+function RequireAuth() {
+  const { loading, isAuthenticated } = useAuth();
+  const location = useLocation();
+
+  if (loading) return <div className={styles.loading}>Loading…</div>;
+  if (!isAuthenticated) return <Navigate to="/login" state={{ from: location }} replace />;
+
+  return <Outlet />;
+}
+
+/** Platform operator only. */
+function RequireSuperadmin() {
+  const { isSuperadmin } = useAuth();
+  if (!isSuperadmin) return <Navigate to="/" replace />;
+  return <Outlet />;
+}
+
+/** Keeps a signed-in user out of the sign-in and sign-up screens. */
+function RedirectIfAuthenticated({ children }) {
+  const { loading, isAuthenticated } = useAuth();
+  if (loading) return <div className={styles.loading}>Loading…</div>;
+  if (isAuthenticated) return <Navigate to="/" replace />;
+  return children;
+}
+
+// ---------------------------------------------------------------------------
+// Signed-in shell
+// ---------------------------------------------------------------------------
+function AppShell({ children }) {
   const { scanning, progress } = useScan();
-  const isAdmin = role === 'admin';
+  const { user, plan, isSuperadmin, logout } = useAuth();
+  const [health, setHealth] = useState(null);
+
+  useEffect(() => {
+    getHealth().then(setHealth).catch(() => setHealth({ status: 'error' }));
+  }, []);
+
+  const navClass = ({ isActive }) => (isActive ? styles.active : '');
 
   return (
     <div className={styles.app}>
@@ -23,15 +73,11 @@ function AppShell({ user, role, health, onLogout }) {
           <span className={styles.logo}>🔍 Website Monitor</span>
 
           <nav className={styles.nav}>
-            <NavLink to="/" end className={({ isActive }) => isActive ? styles.active : ''}>
-              Dashboard
-            </NavLink>
-            <NavLink to="/history" className={({ isActive }) => isActive ? styles.active : ''}>
-              Scan History
-            </NavLink>
-            <NavLink to="/help" className={({ isActive }) => isActive ? styles.active : ''}>
-              Help
-            </NavLink>
+            <NavLink to="/" end className={navClass}>Dashboard</NavLink>
+            <NavLink to="/history" className={navClass}>Scan History</NavLink>
+            <NavLink to="/schedules" className={navClass}>Schedules</NavLink>
+            <NavLink to="/help" className={navClass}>Help</NavLink>
+            {isSuperadmin && <NavLink to="/admin" className={navClass}>Platform</NavLink>}
           </nav>
 
           <div className={styles.right}>
@@ -51,6 +97,8 @@ function AppShell({ user, role, health, onLogout }) {
               </div>
             )}
 
+            <UsageMeter />
+
             {health && (
               <div className={styles.badge}>
                 <span className={health.status === 'ok' ? styles.dot : styles.dotErr} />
@@ -59,11 +107,11 @@ function AppShell({ user, role, health, onLogout }) {
             )}
 
             <div className={styles.userInfo}>
-              <span className={styles.userName}>
-                {user}
-                <span className={styles.roleTag}>{isAdmin ? 'Admin' : 'User'}</span>
-              </span>
-              <button className={styles.logoutBtn} onClick={onLogout}>
+              <NavLink to="/account/billing" className={styles.userName}>
+                {user?.name || user?.email}
+                <span className={styles.roleTag}>{plan?.name || 'Free'}</span>
+              </NavLink>
+              <button className={styles.logoutBtn} onClick={logout}>
                 Sign out
               </button>
             </div>
@@ -71,60 +119,91 @@ function AppShell({ user, role, health, onLogout }) {
         </div>
       </header>
 
-      <main className={styles.main}>
-        <Routes>
-          <Route path="/" element={<Dashboard isAdmin={isAdmin} />} />
-          <Route path="/history" element={<History />} />
-          <Route path="/report/:id" element={<ReportPage />} />
-          <Route path="/help" element={<HelpPage />} />
-        </Routes>
-      </main>
+      {/* `children` is used by the routes that render inside the shell without
+          being nested under it — /pricing, which is also reachable signed out. */}
+      <main className={styles.main}>{children || <Outlet />}</main>
     </div>
   );
 }
 
+/** Minimal chrome for pages a signed-out visitor can reach. */
+function PublicLayout({ children }) {
+  return (
+    <div className={styles.app}>
+      <header className={styles.header}>
+        <div className={styles.headerInner}>
+          <NavLink to="/login" className={styles.logo}>🔍 Website Monitor</NavLink>
+          <div className={styles.right}>
+            <NavLink to="/login" className={styles.publicLink}>Sign in</NavLink>
+            <NavLink to="/signup" className={styles.publicCta}>Get started</NavLink>
+          </div>
+        </div>
+      </header>
+      <main className={styles.main}>{children}</main>
+    </div>
+  );
+}
+
+/**
+ * Pricing is public, but a signed-in customer should see it with their normal
+ * navigation rather than being dropped into a marketing shell.
+ */
+function PricingRoute() {
+  const { loading, isAuthenticated } = useAuth();
+
+  if (loading) return <div className={styles.loading}>Loading…</div>;
+
+  return isAuthenticated ? (
+    <AppShell><PricingPage /></AppShell>
+  ) : (
+    <PublicLayout><PricingPage /></PublicLayout>
+  );
+}
+
 // ---------------------------------------------------------------------------
-// Root — handles auth, provides ScanContext
+// Root
 // ---------------------------------------------------------------------------
 export default function App() {
-  const [user, setUser]     = useState(null); // null=loading, false=unauthed, string=username
-  const [role, setRole]     = useState(null); // 'admin' | 'user'
-  const [health, setHealth] = useState(null);
-
-  useEffect(() => {
-    const token = getStoredToken();
-    if (!token) { setUser(false); return; }
-    getMe()
-      .then((data) => { setUser(data.username); setRole(data.role || 'admin'); })
-      .catch(() => { clearSession(); setUser(false); });
-  }, []);
-
-  useEffect(() => {
-    if (!user) return;
-    getHealth()
-      .then(setHealth)
-      .catch(() => setHealth({ status: 'error' }));
-  }, [user]);
-
-  function handleLogin(token, username, loginRole) {
-    storeSession(token, username, loginRole);
-    setUser(username);
-    setRole(loginRole || 'admin');
-  }
-
-  function handleLogout() {
-    clearSession();
-    setUser(false);
-    setRole(null);
-    setHealth(null);
-  }
-
-  if (user === null) return <div className={styles.loading}>Loading…</div>;
-  if (user === false) return <LoginPage onLogin={handleLogin} />;
-
   return (
-    <ScanProvider>
-      <AppShell user={user} role={role} health={health} onLogout={handleLogout} />
-    </ScanProvider>
+    <AuthProvider>
+      <ScanProvider>
+        {/* One shared paywall prompt for every 402 the API returns. */}
+        <UpgradeModal />
+
+        <Routes>
+          {/* Public */}
+          <Route
+            path="/login"
+            element={<RedirectIfAuthenticated><LoginPage /></RedirectIfAuthenticated>}
+          />
+          <Route
+            path="/signup"
+            element={<RedirectIfAuthenticated><SignupPage /></RedirectIfAuthenticated>}
+          />
+          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/verify-email" element={<VerifyEmailPage />} />
+          <Route path="/pricing" element={<PricingRoute />} />
+
+          {/* Signed in */}
+          <Route element={<RequireAuth />}>
+            <Route element={<AppShell />}>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/history" element={<History />} />
+              <Route path="/schedules" element={<SchedulesPage />} />
+              <Route path="/report/:id" element={<ReportPage />} />
+              <Route path="/help" element={<HelpPage />} />
+              <Route path="/account/billing" element={<BillingPage />} />
+
+              <Route element={<RequireSuperadmin />}>
+                <Route path="/admin" element={<AdminPage />} />
+              </Route>
+            </Route>
+          </Route>
+
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </ScanProvider>
+    </AuthProvider>
   );
 }

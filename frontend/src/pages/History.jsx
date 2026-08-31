@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import ScanResultCard from '../components/ScanResultCard';
-import { getScans, exportScansPdf, downloadBlob } from '../api/client';
+import { getScans, exportScansPdf, downloadBlob, readBlobError } from '../api/client';
 import s from './History.module.css';
 
 const PAGE_SIZE = 10;
@@ -108,8 +108,13 @@ export default function History() {
       const ids = filteredSorted.map((scan) => scan.id).filter(Boolean);
       const res = await exportScansPdf(ids);
       downloadBlob(res, 'scan-reports.pdf');
-    } catch {
-      setExportError('Failed to export reports to PDF');
+    } catch (err) {
+      // PDF export is a paid feature; a 402 already opens the shared upgrade
+      // prompt, so adding an inline error on top would just be noise.
+      if (err.response?.status !== 402) {
+        const body = await readBlobError(err);
+        setExportError(body.error || 'Failed to export reports to PDF');
+      }
     } finally {
       setExporting(false);
     }

@@ -1,103 +1,67 @@
-import React, { useRef, useState } from 'react';
-import { exportDatabase, exportWebsites, importDatabase, downloadBlob } from '../api/client';
+/**
+ * Tenant-facing data export.
+ *
+ * The old whole-database backup and restore is gone from here: on a
+ * multi-tenant platform that file holds every customer's data, so it is now a
+ * platform-operator action. What a subscriber gets instead is their own data —
+ * a spreadsheet that round-trips with the importer, and a full JSON export on
+ * the billing page.
+ */
+import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { exportWebsites, downloadBlob, readBlobError } from '../api/client';
+import { useAuth } from '../context/AuthContext';
 import s from './DataBackup.module.css';
 
-export default function DataBackup({ onImported }) {
-  const inputRef = useRef();
-  const [busy, setBusy] = useState('');       // which action is running
+export default function DataBackup() {
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
 
-  async function handleExportDatabase() {
-    setError('');
-    setSuccess('');
-    setBusy('db');
-    try {
-      const res = await exportDatabase();
-      downloadBlob(res, 'monitor-backup.db');
-    } catch {
-      setError('Failed to export database');
-    } finally {
-      setBusy('');
-    }
-  }
+  const { can } = useAuth();
+  const unlocked = can('excel_import_export');
 
   async function handleExportWebsites() {
     setError('');
-    setSuccess('');
-    setBusy('xlsx');
+    setBusy(true);
     try {
-      const res = await exportWebsites();
-      downloadBlob(res, 'websites.xlsx');
-    } catch {
-      setError('Failed to export websites');
+      const response = await exportWebsites();
+      downloadBlob(response, 'websites.xlsx');
+    } catch (err) {
+      // Blob requests deliver their errors as a Blob, so unwrap it. A 402 has
+      // already opened the shared upgrade prompt; nothing to add inline.
+      const body = await readBlobError(err);
+      if (err.response?.status !== 402) {
+        setError(body.error || 'Failed to export websites');
+      }
     } finally {
-      setBusy('');
+      setBusy(false);
     }
   }
 
-  async function handleImportFile(e) {
-    const file = e.target.files[0];
-    e.target.value = '';
-    if (!file) return;
-
-    setError('');
-    setSuccess('');
-
-    const ok = window.confirm(
-      'Restoring a backup REPLACES ALL current data (websites, snapshots and ' +
-        'scan history) with the contents of this file. Your current data is ' +
-        'saved to a .bak file first. Continue?'
+  if (!unlocked) {
+    return (
+      <div className={s.wrap}>
+        <span className={s.hint}>
+          Spreadsheet import and export are part of the Business plan.{' '}
+          <Link to="/pricing" className={s.link}>See plans</Link>
+        </span>
+      </div>
     );
-    if (!ok) return;
-
-    setBusy('import');
-    try {
-      const result = await importDatabase(file);
-      setSuccess(
-        `Database restored: ${result.websites} website(s), ` +
-          `${result.snapshots} snapshot(s), ${result.scan_results} scan(s). ` +
-          `Previous data saved to ${result.backup}.`
-      );
-      onImported?.();
-    } catch (err) {
-      setError(err.response?.data?.error || 'Import failed');
-    } finally {
-      setBusy('');
-    }
   }
 
   return (
     <div className={s.wrap}>
       <div className={s.row}>
-        <button className={s.btn} onClick={handleExportDatabase} disabled={!!busy}>
-          {busy === 'db' ? 'Exporting…' : '💾 Export database (.db)'}
+        <button className={s.btn} onClick={handleExportWebsites} disabled={busy}>
+          {busy ? 'Exporting…' : '📊 Export websites (.xlsx)'}
         </button>
-        <button className={s.btn} onClick={handleExportWebsites} disabled={!!busy}>
-          {busy === 'xlsx' ? 'Exporting…' : '📊 Export websites (.xlsx)'}
-        </button>
-        <button
-          className={s.btn}
-          onClick={() => inputRef.current.click()}
-          disabled={!!busy}
-        >
-          {busy === 'import' ? 'Restoring…' : '♻️ Import database (.db)'}
-        </button>
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".db,.sqlite,.sqlite3"
-          onChange={handleImportFile}
-          style={{ display: 'none' }}
-        />
       </div>
       <span className={s.hint}>
-        Full backup includes websites, snapshots and scan history. Importing a
-        backup <strong>replaces all current data</strong>.
+        The exported columns round-trip with the importer above. For your full
+        scan history, use <Link to="/account/billing" className={s.link}>Export my data</Link>.
       </span>
 
       {error && <p className={s.error}>{error}</p>}
-      {success && <p className={s.success}>{success}</p>}
     </div>
   );
 }

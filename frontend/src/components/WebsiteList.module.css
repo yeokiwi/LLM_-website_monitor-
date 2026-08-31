@@ -56,6 +56,22 @@
 }
 .scraperOption:last-child { margin-right: 0; }
 .scraperOption input { cursor: pointer; accent-color: #6366f1; }
+
+/* An engine the current plan does not include: shown, but not selectable, so
+   the value of upgrading is visible rather than hidden. */
+.scraperOptionLocked {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 12px;
+  font-size: 0.8rem;
+  color: #9ca3af;
+  cursor: not-allowed;
+  user-select: none;
+}
+.scraperOptionLocked:last-child { margin-right: 0; }
+.scraperOptionLocked input { cursor: not-allowed; }
+.scraperHeadGroup .scraperOptionLocked { font-weight: 400; margin-right: 0; }
 .remarkHead { white-space: nowrap; }
 .remarkCell { min-width: 160px; }
 .remarkInput {
