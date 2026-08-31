@@ -1,9 +1,13 @@
 /**
- * Database backup / restore
+ * Backup and restore.
  *
- *   GET  /api/database/export — download the live SQLite DB as a single file
- *                               (websites + snapshots + full scan history).
- *   POST /api/database/import — replace ALL data with an uploaded backup file.
+ *   GET  /api/database/my-data — the caller's own websites and scan history as
+ *                                JSON. This is the tenant-facing export.
+ *   GET  /api/database/export  — the whole SQLite file. Platform operator only:
+ *                                it contains every tenant's data.
+ *   POST /api/database/import  — replace ALL data with an uploaded backup.
+ *                                Platform operator only, and irreversible for
+ *                                every customer on the instance.
  *
  * Restore is performed in-process (the long-lived `db` connection is reused, so
  * no server restart is needed): the uploaded file is validated, the current
@@ -20,6 +24,10 @@ const crypto = require('crypto');
 
 const db = require('../db');
 const { dbPath, Database } = require('../db');
+const { requireSuperadmin } = require('../middleware/auth');
+const { requireFeature } = require('../middleware/entitlements');
+const websiteRepo = require('../repositories/websiteRepo');
+const scanRepo = require('../repositories/scanRepo');
 
 const router = express.Router();
 
@@ -45,9 +53,29 @@ function tableColumns(conn, table) {
 }
 
 // ---------------------------------------------------------------------------
-// GET /api/database/export — stream a consistent snapshot of the live DB
+// GET /api/database/my-data — the caller's own data, as JSON
 // ---------------------------------------------------------------------------
-router.get('/export', (req, res) => {
+router.get('/my-data', requireFeature('db_backup', 'Data export'), (req, res) => {
+  const websites = websiteRepo.listForExport(req.user.userId);
+  const { results: scans } = scanRepo.list(req.user.userId, 100_000, 0);
+
+  const payload = {
+    exported_at: new Date().toISOString(),
+    account: req.user.email,
+    websites,
+    scans,
+  };
+
+  const filename = `my-monitor-data-${new Date().toISOString().slice(0, 10)}.json`;
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(JSON.stringify(payload, null, 2));
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/database/export — the full multi-tenant database file
+// ---------------------------------------------------------------------------
+router.get('/export', requireSuperadmin, (req, res) => {
   const buffer = db.serialize();
   const filename = `monitor-backup-${new Date().toISOString().slice(0, 10)}.db`;
   res.setHeader('Content-Type', 'application/octet-stream');
@@ -57,8 +85,21 @@ router.get('/export', (req, res) => {
 
 // ---------------------------------------------------------------------------
 // POST /api/database/import — replace all data with an uploaded backup
+//
+// This wipes every tenant's websites, snapshots and scan history, so it demands
+// an explicit `?confirm=replace-all-data` on top of the operator role. A
+// mis-click here is not recoverable from the app.
 // ---------------------------------------------------------------------------
-router.post('/import', upload.single('file'), (req, res) => {
+router.post('/import', requireSuperadmin, upload.single('file'), (req, res) => {
+  if (req.query.confirm !== 'replace-all-data') {
+    return res.status(400).json({
+      error:
+        'This replaces every account\'s data on this instance. Re-send with ' +
+        '?confirm=replace-all-data to proceed.',
+      code: 'CONFIRMATION_REQUIRED',
+    });
+  }
+
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
@@ -89,6 +130,15 @@ router.post('/import', upload.single('file'), (req, res) => {
             throw new Error(`missing table "${table}"`);
           }
           srcColumns[table] = cols;
+        }
+
+        // A pre-multitenant backup has no owner column; restoring it would
+        // produce websites nobody can see (owner_id is NOT NULL).
+        if (!srcColumns.websites.includes('owner_id')) {
+          throw new Error(
+            'this backup predates multi-tenant accounts and cannot be restored ' +
+              'directly — restore it on an older build first, then upgrade'
+          );
         }
       } finally {
         if (src) src.close();

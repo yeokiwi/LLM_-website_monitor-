@@ -98,7 +98,9 @@ const MAX_TOKENS = 4096;
  * @param {string} [params.diffText]         — line diff from diffService
  * @param {Array}  [params.pages]            — structured page list from scraper
  * @param {boolean} [params.isFirstScan]     — true when no historical baseline exists
- * @returns {Promise<string>} markdown report
+ * @returns {Promise<{ markdown: string, usage: { inputTokens: number, outputTokens: number, model: string } }>}
+ *   The report plus the call's token usage, which usage metering records against
+ *   the account that triggered the scan.
  */
 async function summarizeChanges({
   websiteUrl,
@@ -128,13 +130,24 @@ async function summarizeChanges({
   return callOpenAICompatible(userMessage);
 }
 
+/** Milliseconds before an LLM call is abandoned. */
+function requestTimeoutMs() {
+  const configured = parseInt(process.env.LLM_TIMEOUT_MS, 10);
+  return Number.isFinite(configured) && configured > 0 ? configured : 120_000;
+}
+
+const EMPTY_ANALYSIS = '## Executive Summary\n\nNo analysis generated.';
+
 // ---------------------------------------------------------------------------
 // Claude (Anthropic)
 // ---------------------------------------------------------------------------
 
 async function callClaude(userMessage) {
   const Anthropic = require('@anthropic-ai/sdk');
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const client = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    timeout: requestTimeoutMs(),
+  });
   const model = process.env.LLM_MODEL || DEFAULT_CLAUDE_MODEL;
 
   const message = await client.messages.create({
@@ -144,7 +157,14 @@ async function callClaude(userMessage) {
     messages: [{ role: 'user', content: userMessage }],
   });
 
-  return message.content[0]?.text || '## Executive Summary\n\nNo analysis generated.';
+  return {
+    markdown: message.content[0]?.text || EMPTY_ANALYSIS,
+    usage: {
+      inputTokens: message.usage?.input_tokens || 0,
+      outputTokens: message.usage?.output_tokens || 0,
+      model,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +176,7 @@ async function callOpenAICompatible(userMessage) {
 
   const clientOptions = {
     apiKey: process.env.OPENAI_API_KEY || 'no-key-required',
+    timeout: requestTimeoutMs(),
   };
 
   if (process.env.OPENAI_BASE_URL) {
@@ -174,7 +195,14 @@ async function callOpenAICompatible(userMessage) {
     ],
   });
 
-  return completion.choices[0]?.message?.content || '## Executive Summary\n\nNo analysis generated.';
+  return {
+    markdown: completion.choices[0]?.message?.content || EMPTY_ANALYSIS,
+    usage: {
+      inputTokens: completion.usage?.prompt_tokens || 0,
+      outputTokens: completion.usage?.completion_tokens || 0,
+      model,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
