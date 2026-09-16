@@ -100,6 +100,25 @@ export const exportMyData = () =>
 export const exportWebsites = () =>
   api.get('/websites/export', { responseType: 'blob' });
 
+// ── Backup and restore ────────────────────────────────────────────────────────
+export const exportDatabase = () =>
+  api.get('/database/export', { responseType: 'blob' });
+
+/**
+ * Replace every website, scan and schedule on the instance with the uploaded
+ * backup. The confirmation is a query parameter the server insists on, so a
+ * stray POST cannot wipe the data on its own.
+ */
+export const importDatabase = (file) => {
+  const form = new FormData();
+  form.append('file', file);
+  return api
+    .post('/database/import?confirm=replace-all-data', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    .then((r) => r.data);
+};
+
 // Trigger a browser download from a blob axios response, using the filename
 // from the Content-Disposition header when present.
 export const downloadBlob = (response, fallbackName) => {

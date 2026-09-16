@@ -6,6 +6,7 @@ import History from './pages/History';
 import LoginPage from './pages/LoginPage';
 import SchedulesPage from './pages/SchedulesPage';
 import ReportPage from './pages/ReportPage';
+import BackupPage from './pages/BackupPage';
 import HelpPage from './pages/HelpPage';
 
 import ErrorBoundary from './components/ErrorBoundary';
@@ -61,6 +62,7 @@ function AppShell() {
             <NavLink to="/" end className={navClass}>Dashboard</NavLink>
             <NavLink to="/history" className={navClass}>Scan History</NavLink>
             <NavLink to="/schedules" className={navClass}>Schedules</NavLink>
+            <NavLink to="/backup" className={navClass}>Backup</NavLink>
             <NavLink to="/help" className={navClass}>Help</NavLink>
           </nav>
 
@@ -129,6 +131,7 @@ export default function App() {
                 <Route path="/history" element={<History />} />
                 <Route path="/schedules" element={<SchedulesPage />} />
                 <Route path="/report/:id" element={<ReportPage />} />
+                <Route path="/backup" element={<BackupPage />} />
                 <Route path="/help" element={<HelpPage />} />
               </Route>
             </Route>

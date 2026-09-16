@@ -58,6 +58,7 @@ describe('access control', () => {
       ['get', '/api/scans'],
       ['get', '/api/schedules'],
       ['get', '/api/database/export'],
+      ['post', '/api/database/import'],
       ['post', '/api/scans'],
       ['post', '/api/upload'],
     ])('refuses %s %s without a token', async (method, path) => {

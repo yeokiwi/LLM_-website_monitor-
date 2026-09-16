@@ -36,6 +36,7 @@ One shared username and password, set in the server's environment, protect one s
   - [Importing websites from Excel](#importing-websites-from-excel)
   - [Running a scan](#running-a-scan)
   - [Viewing history](#viewing-history)
+  - [Backing up and restoring](#backing-up-and-restoring)
 - [Excel / CSV Import Format](#excel--csv-import-format)
 - [Scan Result Statuses](#scan-result-statuses)
 - [API Reference](#api-reference)
@@ -64,6 +65,7 @@ It runs as a single-team tool: one shared username and password, set in the serv
 - **Scheduled scans** — hourly, daily or weekly background scans with an email when something changes
 - **Per-scan cost record** — LLM token counts and duration are stored on every scan row, so API spend can be totalled from the database
 - **PDF report export** — export every structured report on the scan history page to a single PDF file
+- **Backup and restore** — download the whole database as one file and restore it onto any instance, from the Backup page
 
 ---
 
@@ -175,10 +177,12 @@ Providers can also refuse a query outright (HTTP 400 — free Serper accounts re
         │   └── ScanContext.jsx ← batch scan progress across navigation
         ├── components/
         │   ├── AddWebsiteForm.jsx   ExcelUpload.jsx    PeriodSelector.jsx
-        │   └── WebsiteList.jsx      ScanResultCard.jsx DataBackup.jsx
+        │   ├── WebsiteList.jsx      ScanResultCard.jsx DataBackup.jsx
+        │   └── ErrorBoundary.jsx    ← render errors show a message, not a blank page
         └── pages/
             ├── Dashboard.jsx        History.jsx        ReportPage.jsx
             ├── LoginPage.jsx        SchedulesPage.jsx
+            ├── BackupPage.jsx   ← download a backup, restore from one
             └── HelpPage.jsx
 ```
 
@@ -615,6 +619,39 @@ Click **Scan History** in the navigation bar to see a paginated log of every sca
 
 Use **Export reports (PDF)** in the top-right of the page to download all of the structured reports currently in view (the search filter is respected) as a single PDF file.
 
+### Backing up and restoring
+
+Click **Backup** in the navigation bar.
+
+**Download full backup (.db)** gives you a SQLite file holding every website,
+snapshot, scan and schedule. It is what you restore from, and it is also just a
+database — open it in any SQLite tool and read it.
+
+It carries **no sign-in credentials**. The username and password come from
+`AUTH_USERNAME` / `AUTH_PASSWORD` in the server's environment rather than from
+the database, so the password hash in the file is inert; it is blanked on the way
+out regardless, along with the rows left behind by the removed billing tables.
+
+**Download my data (.json)** is the readable alternative — websites and scan
+reports as JSON, for reading somewhere else. It is not restorable.
+
+**Restore** replaces everything. Every website, snapshot, scan and schedule on
+the instance is dropped and reloaded from the backup, so anything added since the
+backup was taken is lost. The page asks you to type `replace all data` before the
+button does anything, because the only way back is the `<DB_PATH>.bak-<timestamp>`
+file the server writes beside the database first — and recovering from that means
+server access, not a click in the app.
+
+A backup restores onto **any** instance, whatever its login is: every restored row
+is re-assigned to the account doing the restore. Without that, a backup moved
+between instances lands owned by an account id that does not exist there, and the
+dashboard comes up empty with nothing reporting an error.
+
+One thing a backup will not do is merge. If the file holds the same URL under two
+different accounts, those cannot collapse onto one account — websites are unique
+per owner and URL — so the restore is refused and names the URLs rather than
+quietly dropping rows.
+
 ---
 
 ## Excel / CSV Import Format
@@ -681,7 +718,7 @@ Status codes worth handling: **401** not signed in · **404** not found.
 | `DELETE` | `/api/websites/:id` | — | Remove (deactivate) a website |
 | `POST` | `/api/websites/bulk-delete` | `{ ids: number[] }` | Remove many |
 | `POST` | `/api/websites/bulk-update` | `{ ids?, updates }` | Apply engine flags; omitting `ids` targets the caller's own sites |
-| `GET` | `/api/websites/export` | — | Export as `.xlsx` **(Business)** |
+| `GET` | `/api/websites/export` | — | Export the caller's websites as `.xlsx` |
 | `GET` | `/api/websites/:id` | — | One website with its recent scans |
 
 ### Scans
@@ -690,7 +727,7 @@ Status codes worth handling: **401** not signed in · **404** not found.
 |---|---|---|---|
 | `POST` | `/api/scans` | `{ websiteIds: number[], periodDays: number }` | Trigger a scan |
 | `GET` | `/api/scans` | `?limit=20&offset=0` | Paginated scan history |
-| `GET` | `/api/scans/export-pdf` | `?ids=1,2,3` (optional) | Export the caller's reports as one PDF **(Pro)** |
+| `GET` | `/api/scans/export-pdf` | `?ids=1,2,3` (optional) | Export the caller's reports as one PDF |
 | `GET` | `/api/scans/:id` | — | Single scan result |
 | `PATCH` | `/api/scans/:id` | `{ remark }` | Save a remark on a scan |
 | `GET` | `/api/scans/website/:websiteId` | — | All scans for one website |
@@ -700,17 +737,17 @@ Status codes worth handling: **401** not signed in · **404** not found.
 | Method | Path | Body / Params | Description |
 |---|---|---|---|
 | `GET` | `/api/schedules` | — | Current schedules and the available cadences |
-| `PUT` | `/api/schedules/:websiteId` | `{ frequency, periodDays?, isEnabled? }` | Create or update a schedule **(Pro/Business)** |
+| `PUT` | `/api/schedules/:websiteId` | `{ frequency, periodDays?, isEnabled? }` | Create or update a schedule |
 | `DELETE` | `/api/schedules/:websiteId` | — | Stop scanning automatically |
 
 ### Data
 
 | Method | Path | Body | Description |
 |---|---|---|---|
-| `POST` | `/api/upload` | `multipart/form-data` field `file` | Parse an Excel/CSV file **(Business)** |
-| `GET` | `/api/database/my-data` | — | Websites and scans as JSON |
-| `GET` | `/api/database/export` | — | The whole SQLite file |
-| `POST` | `/api/database/import` | `?confirm=replace-all-data` + file | Replace **all** data |
+| `POST` | `/api/upload` | `multipart/form-data` field `file` | Parse an Excel/CSV file |
+| `GET` | `/api/database/my-data` | — | Websites and scans as readable JSON. Not restorable |
+| `GET` | `/api/database/export` | — | The whole SQLite file, with credentials removed |
+| `POST` | `/api/database/import` | `?confirm=replace-all-data` + `multipart/form-data` field `file` | Replace **all** data with a backup, re-owned to the caller |
 
 ### Utility
 

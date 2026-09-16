@@ -14,6 +14,7 @@ const TOC = [
   { id: 'reports',        label: 'Change Reports' },
   { id: 'history',        label: 'Scan History' },
   { id: 'schedules',      label: 'Automatic Scans' },
+  { id: 'backup',         label: 'Backup & Restore' },
   { id: 'configuration',  label: 'Configuration' },
   { id: 'faq',            label: 'FAQ' },
 ];
@@ -481,7 +482,45 @@ export default function HelpPage() {
 
         <hr className={s.divider} />
 
-        {/* ── 10. Configuration ───────────────────────────────────────────── */}
+        {/* ── 10. Backup & Restore ────────────────────────────────────────── */}
+        <Section id="backup" icon="💾" title="Backup & Restore">
+          <p className={s.p}>
+            The <Link to="/backup" className={s.link}>Backup</Link> page downloads
+            everything this instance holds as a single SQLite file, and restores
+            from one taken earlier or on another instance.
+          </p>
+
+          <div className={s.envTable}>
+            <div className={s.envRow}>
+              <code className={s.envKey}>Full backup (.db)</code>
+              <span>Every website, snapshot, scan and schedule. This is the one you restore from.</span>
+            </div>
+            <div className={s.envRow}>
+              <code className={s.envKey}>My data (.json)</code>
+              <span>Websites and reports in readable form, for reading elsewhere. Not restorable.</span>
+            </div>
+          </div>
+
+          <Callout type="info">
+            A backup carries no sign-in credentials. The username and password
+            live in the server&apos;s environment rather than the database, so the
+            file is safe to keep with your other backups — and it restores onto
+            any instance whatever its login is, because every row is re-assigned
+            to the account doing the restore.
+          </Callout>
+
+          <Callout type="warning">
+            Restoring <strong>replaces</strong> everything — anything added since
+            the backup was taken is gone. The data being replaced is written to a
+            <code> .bak-…</code> file beside the database first, but recovering
+            from that needs server access; it cannot be undone from the app. The
+            page asks you to type a confirmation for exactly this reason.
+          </Callout>
+        </Section>
+
+        <hr className={s.divider} />
+
+        {/* ── 11. Configuration ───────────────────────────────────────────── */}
         <Section id="configuration" icon="⚙️" title="Configuration">
           <Callout type="info">
             This section is for whoever <em>runs</em> the service. If you are just
