@@ -102,29 +102,48 @@ function absoluteDate(raw) {
 }
 
 /**
+ * What each search backend's query language actually supports.
+ *
+ * Both of these are from the providers' own documentation, not inference — the
+ * cost of guessing here has been two rounds of silent breakage:
+ *
+ *  - Serper is Google, whose `site:` takes a host *and path* prefix, so
+ *    `site:host/path` scopes to one page. Free Serper accounts reject `inurl:`
+ *    with an HTTP 400 ("Query pattern not allowed for free accounts").
+ *  - Brave's `site:` is documented for domains and subdomains only, and it has
+ *    no `inurl:` at all. A path in `site:` matches nothing and comes back as a
+ *    perfectly healthy HTTP 200 with zero results, which is why Brave reported
+ *    "zero indexed results" rather than an error. Brave does support exact
+ *    phrases, so a quoted URL is how a page is scoped there.
+ */
+const PROVIDER_QUERY_SUPPORT = {
+  serper: { pathScopedSite: true },
+  brave: { pathScopedSite: false },
+};
+
+/**
  * The search queries for a monitored URL, most precise first.
  *
- * A URL with a path is monitored as a page: results are restricted to that path
+ * A URL with a path is monitored as a page: results are restricted to that page
  * so two Acts on the same host no longer receive identical results. A bare
  * domain is still monitored as a domain.
  *
- * There is more than one shape because search APIs restrict which operators an
- * account may use, and they do not publish the list. Free Serper accounts
- * reject `inurl:` outright — "Query pattern not allowed for free accounts" —
- * which used to fail the whole engine. `site:<host><path>` scopes to the same
- * page with a single, widely supported operator, so `inurl:` buys nothing; the
- * plainer shapes below it exist so a still-more-restricted account degrades
- * instead of failing.
+ * The list is a ladder rather than a single query because a provider can refuse
+ * a shape (HTTP 400) or quietly match nothing with it (HTTP 200, no results),
+ * and neither is something this code can predict for every account. The entries
+ * below get progressively plainer, ending at domain-wide so a page with no
+ * index presence of its own still reports something.
  *
- * @returns {Array<{ scope: string, primary: string, news: string, announcements: string }>}
+ * @returns {Array<{ scope: string, primary: string, news: string,
+ *                   announcements: string, pageScoped: boolean }>}
  */
-function queryVariants(url, domain) {
+function queryVariants(url, domain, provider) {
   let host = domain;
   let path = '';
   try {
     const parsed = new URL(url);
-    // The URL's real host, not the www-stripped `domain`: `site:` matches on a
-    // host+path prefix, so the two halves have to come from the same place.
+    // The URL's real host, not the www-stripped `domain`: a host+path prefix
+    // has to have both halves come from the same place.
     host = parsed.hostname;
     path = parsed.pathname.replace(/\/+$/, '');
   } catch {
@@ -136,37 +155,39 @@ function queryVariants(url, domain) {
     primary: `site:${domain}`,
     news: domain,
     announcements: `site:${domain} (blog OR changelog OR "release notes" OR announcement OR "what's new" OR news OR updates)`,
+    pageScoped: false,
+  };
+  const domainPlain = {
+    scope: domain,
+    primary: domain,
+    news: domain,
+    announcements: `${domain} news updates`,
+    pageScoped: false,
   };
 
-  if (!path) {
-    return [
-      domainWide,
-      // No operators at all, for an account that rejects even `site:`.
-      { scope: domain, primary: domain, news: domain, announcements: `${domain} news updates` },
-    ];
-  }
+  if (!path) return [domainWide, domainPlain];
 
   const bare = `${host}${path}`;
+  const quoted = {
+    scope: `"${bare}"`,
+    primary: `"${bare}"`,
+    news: `"${bare}"`,
+    announcements: `"${bare}" update`,
+    pageScoped: true,
+  };
 
-  return [
-    // Page-scoped with one operator.
-    {
+  const ladder = [];
+  if (PROVIDER_QUERY_SUPPORT[provider]?.pathScopedSite) {
+    ladder.push({
       scope: `site:${bare}`,
       primary: `site:${bare}`,
       news: `"${bare}"`,
       announcements: `site:${bare} (update OR amendment OR revision OR changelog OR "release notes" OR announcement)`,
-    },
-    // No operators at all, for an account that rejects even `site:`.
-    {
-      scope: `"${bare}"`,
-      primary: `"${bare}"`,
-      news: `"${bare}"`,
-      announcements: `"${bare}" update`,
-    },
-    // Last resort: domain-wide. Loses page scoping, but returns something
-    // rather than failing the engine.
-    domainWide,
-  ];
+      pageScoped: true,
+    });
+  }
+  ladder.push(quoted, domainWide, domainPlain);
+  return ladder;
 }
 
 /**
@@ -182,53 +203,93 @@ function isQueryRejection(err) {
 }
 
 /**
- * Which query variant each provider's account was last seen to accept.
+ * Query shapes a provider's account has been seen to refuse outright.
  *
- * The restriction belongs to the API key, not to any one website, so a single
- * discovery serves every scan for the life of the process. Without this, a
- * restricted account would burn a rejected call on every scan forever.
+ * A 400 belongs to the API key, not to any one website, so one discovery serves
+ * every scan for the life of the process — otherwise a restricted account burns
+ * a rejected call on every scan forever.
  */
-const acceptedVariant = new Map();
+const refusedVariants = new Map();
 
 /**
- * Run a provider's searches, stepping down to a plainer query shape whenever it
- * rejects the current one.
+ * The shape that last produced results for a given provider and URL.
  *
- * `run(variant)` performs all of that provider's searches and must reject with
- * the *primary* search's error when the primary fails — the primary is the
- * snapshot, so its failure is the engine's failure. Once every variant has been
- * refused the last error is rethrown, which keeps a dead key or an exhausted
- * quota visible as an error rather than quietly becoming "nothing indexed".
+ * Deliberately separate from `refusedVariants`: an empty result set says
+ * something about *this page* — it has no index entry of its own — not about
+ * the account. Caching it per provider would let one obscure page drag every
+ * other website down to domain-wide results.
+ */
+const productiveVariants = new Map();
+
+/**
+ * Run a provider's searches, stepping down to a plainer query shape when the
+ * current one is refused or matches nothing.
+ *
+ * `run(variant)` performs that provider's searches and must reject with the
+ * primary search's error when the primary fails — the primary is the snapshot,
+ * so its failure is the engine's failure. It returns the scrape result, which
+ * carries `pages`; an empty `pages` is what "matched nothing" looks like.
+ *
+ * Two different signals, handled differently:
+ *
+ *  - **Refused (400).** The shape is unusable for this key. Remember it and
+ *    never try it again this process.
+ *  - **Zero results (200).** The shape is legal but found nothing for this page.
+ *    Try a plainer one, because an empty supplementary section is no use to
+ *    anybody — but remember it per URL, not per account.
+ *
+ * When nothing produces results the most precise attempt is what gets kept, so
+ * the snapshot stays page-scoped and stable rather than flapping between
+ * shapes. Errors that are not refusals propagate immediately: a 429 is a rate
+ * limit, and a plainer query would only spend more of an exhausted quota.
  */
 async function withQueryFallback(provider, url, domain, run) {
-  const variants = queryVariants(url, domain);
-  const start = Math.min(acceptedVariant.get(provider) ?? 0, variants.length - 1);
+  const variants = queryVariants(url, domain, provider);
+  const refusedFloor = refusedVariants.get(provider) ?? 0;
+  const start = Math.min(
+    Math.max(refusedFloor, productiveVariants.get(`${provider} ${url}`) ?? 0),
+    variants.length - 1
+  );
 
   let lastError;
+  let firstEmpty = null;
+
   for (let i = start; i < variants.length; i += 1) {
+    let result;
     try {
-      const result = await run(variants[i]);
-      acceptedVariant.set(provider, i);
-      return result;
+      result = await run(variants[i]);
     } catch (err) {
       lastError = err;
       if (!isQueryRejection(err)) throw err;
+      refusedVariants.set(provider, i + 1);
+      continue;
     }
+
+    if (result.pages.length > 0) {
+      productiveVariants.set(`${provider} ${url}`, i);
+      return result;
+    }
+
+    // Legal query, nothing indexed under it. Keep the most precise empty result
+    // in case every shape comes up empty, and try something broader.
+    if (firstEmpty === null) firstEmpty = result;
   }
+
+  if (firstEmpty) return firstEmpty;
 
   // Every shape refused. Say that, rather than surfacing the bare
   // "Request failed with status code 400" — which query was rejected is the
   // only thing that makes this actionable.
   throw new ScrapeError(
-    `${provider} refused every query form for ${url} ` +
-      `(tried ${variants.length - start}): ${describeError(lastError)}`,
+    `${provider} refused every query form for ${url}: ${describeError(lastError)}`,
     { provider, cause: lastError }
   );
 }
 
-/** Test seam: forget which query shapes providers were seen to accept. */
+/** Test seam: forget what providers have been seen to refuse or find. */
 function resetQueryVariantCache() {
-  acceptedVariant.clear();
+  refusedVariants.clear();
+  productiveVariants.clear();
 }
 
 /**
@@ -468,8 +529,13 @@ async function scrapeWithBrave(url, periodDays) {
     //  1. Indexed pages at the monitored path (main content snapshot)
     //  2. News coverage mentioning the page or domain
     //  3. Announcement / changelog / release pages at that path
+    // No freshness on the primary. It is the snapshot: it should answer "what
+    // is indexed here now", and filtering it by recency both starves a stable
+    // page of results and makes the snapshot shrink on its own as entries age
+    // out of the window — which then diffs as pages being removed. Recency is
+    // the point of the news and announcement passes, so it stays on those.
     const [webResults, newsResults, announcementResults] = await Promise.allSettled([
-      braveFetch('/web/search', { q: queries.primary, count: 20, freshness }),
+      braveFetch('/web/search', { q: queries.primary, count: 20 }),
       braveFetch('/news/search', { q: queries.news, count: 10, freshness }),
       braveFetch('/web/search', { q: queries.announcements, count: 10, freshness }),
     ]);
@@ -488,7 +554,11 @@ async function scrapeWithBrave(url, periodDays) {
     }
 
     const pages = [];
-    const notes = [`Brave query: ${queries.scope}`];
+    const notes = [
+      queries.pageScoped
+        ? `Brave query: ${queries.scope}`
+        : `Brave query: ${queries.scope} — nothing is indexed for this page on its own, so these results cover the whole domain`,
+    ];
 
     collectPages(pages, webResults.value?.web?.results, (r) => ({
       type: 'web',
@@ -619,8 +689,10 @@ async function scrapeWithSerper(url, periodDays) {
   return withQueryFallback('serper', url, domain, async (queries) => {
     // Three parallel searches mirroring the Brave strategy, scoped to the
     // monitored path rather than the whole domain.
+    // No `tbs` on the primary — see the note in scrapeWithBrave: the snapshot
+    // query must not be filtered by recency.
     const [webResults, newsResults, announcementResults] = await Promise.allSettled([
-      serperFetch('/search', { q: queries.primary, num: 20, tbs }),
+      serperFetch('/search', { q: queries.primary, num: 20 }),
       serperFetch('/news', { q: queries.news, num: 10, tbs }),
       serperFetch('/search', { q: queries.announcements, num: 10, tbs }),
     ]);
@@ -637,7 +709,11 @@ async function scrapeWithSerper(url, periodDays) {
     }
 
     const pages = [];
-    const notes = [`Serper query: ${queries.scope}`];
+    const notes = [
+      queries.pageScoped
+        ? `Serper query: ${queries.scope}`
+        : `Serper query: ${queries.scope} — nothing is indexed for this page on its own, so these results cover the whole domain`,
+    ];
 
     collectPages(pages, webResults.value?.organic, (r) => ({
       type: 'web',

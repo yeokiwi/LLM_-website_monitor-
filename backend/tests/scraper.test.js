@@ -180,7 +180,7 @@ describe('Brave search normalisation', () => {
     expect(queries[0]).not.toBe('site:sso.agc.gov.sg');
   });
 
-  it('scopes with site: rather than inurl:, which free accounts reject', async () => {
+  it('scopes by exact phrase, because Brave\'s site: takes no path', async () => {
     const queries = [];
     route((config) => {
       queries.push(queryOf(config));
@@ -189,9 +189,29 @@ describe('Brave search normalisation', () => {
 
     await scrapeWithProvider('brave', 'https://www.mtcr.info/en/mtcr-annex', 30);
 
-    // `site:` takes a host+path prefix, so it scopes to the page on its own.
-    expect(queries[0]).toBe('site:www.mtcr.info/en/mtcr-annex');
+    // Brave documents `site:` for domains and subdomains only. A path inside it
+    // matches nothing and returns a healthy, empty 200 — which is how this got
+    // reported as "zero indexed results" rather than as an error.
+    expect(queries[0]).toBe('"www.mtcr.info/en/mtcr-annex"');
     expect(queries.join(' ')).not.toContain('inurl:');
+    expect(queries.join(' ')).not.toContain('site:www.mtcr.info/en');
+  });
+
+  it('does not filter the snapshot query by recency', async () => {
+    // The primary is the snapshot: "what is indexed here now". Filtering it by
+    // freshness starves a stable page of results, and makes the snapshot shrink
+    // on its own as entries age out — which then diffs as pages being removed.
+    const calls = [];
+    route((config) => {
+      calls.push({ url: config.url, freshness: config.params?.freshness });
+      return isNewsCall(config) ? { data: { results: [] } } : { data: { web: { results: [] } } };
+    });
+
+    await scrapeWithProvider('brave', 'https://example.com/docs', 30);
+
+    expect(calls[0].freshness).toBeUndefined();
+    // Recency is still the point of the news and announcement passes.
+    expect(calls.slice(1).some((c) => c.freshness === 'pm')).toBe(true);
   });
 
   it('keeps the host the URL actually used, so the path prefix matches', async () => {
@@ -413,6 +433,103 @@ describe('restricted accounts (the query-pattern fallback)', () => {
   });
 });
 
+describe('pages with no index entry of their own', () => {
+  /** Answer only queries matching `productive`; everything else returns 0 hits. */
+  function onlyProductiveFor(productive, hits) {
+    const attempted = [];
+    route((config) => {
+      const q = queryOf(config);
+      attempted.push(q);
+      const match = productive.test(q);
+      if (isNewsCall(config)) return { data: { results: [], news: [] } };
+      return {
+        data: {
+          web: { results: match ? hits : [] },
+          organic: match ? hits : [],
+        },
+      };
+    });
+    return attempted;
+  }
+
+  it('widens the scope when the page-scoped query finds nothing', async () => {
+    // The reported symptom: Brave answered 200 with zero results, so the report
+    // said "zero indexed results" and there was no error to react to.
+    const attempted = onlyProductiveFor(/^site:mtcr\.info$/, [
+      { url: 'https://www.mtcr.info/en/news', title: 'MTCR News', description: 'x' },
+    ]);
+
+    const { contentText, pages, notes } = await scrapeWithProvider(
+      'brave',
+      'https://www.mtcr.info/en/mtcr-annex',
+      30
+    );
+
+    expect(attempted[0]).toBe('"www.mtcr.info/en/mtcr-annex"');
+    expect(attempted).toContain('site:mtcr.info');
+    expect(pages.length).toBeGreaterThan(0);
+    expect(contentText).toContain('https://www.mtcr.info/en/news');
+    // Domain-wide results for a page-level monitor have to say so, or the
+    // report silently claims the page changed when the host did.
+    expect(notes.join(' ')).toMatch(/whole domain/i);
+  });
+
+  it('says nothing about the domain when the page itself has results', async () => {
+    onlyProductiveFor(/mtcr-annex/, [
+      { url: 'https://www.mtcr.info/en/mtcr-annex', title: 'Annex', description: 'x' },
+    ]);
+
+    const { notes } = await scrapeWithProvider(
+      'brave',
+      'https://www.mtcr.info/en/mtcr-annex',
+      30
+    );
+
+    expect(notes.join(' ')).not.toMatch(/whole domain/i);
+  });
+
+  it('keeps the page-scoped result when every shape is empty', async () => {
+    // Nothing anywhere: the snapshot should stay page-scoped and stable rather
+    // than settling on whichever empty query happened to run last.
+    const attempted = onlyProductiveFor(/never-matches/, []);
+
+    const { contentText, pages } = await scrapeWithProvider(
+      'brave',
+      'https://www.mtcr.info/en/mtcr-annex',
+      30
+    );
+
+    expect(pages).toHaveLength(0);
+    expect(contentText).toContain('Results (0):');
+    expect(attempted).toContain('site:mtcr.info'); // it did try to widen
+  });
+
+  it('remembers the productive scope per URL, not per account', async () => {
+    // An obscure page falling back to domain-wide must not drag every other
+    // website down with it.
+    onlyProductiveFor(/^site:mtcr\.info$/, [
+      { url: 'https://www.mtcr.info/en/news', title: 'News', description: 'x' },
+    ]);
+    await scrapeWithProvider('brave', 'https://www.mtcr.info/en/mtcr-annex', 30);
+
+    const other = onlyProductiveFor(/other-page/, [
+      { url: 'https://www.mtcr.info/en/other-page', title: 'Other', description: 'x' },
+    ]);
+    await scrapeWithProvider('brave', 'https://www.mtcr.info/en/other-page', 30);
+
+    // The second URL starts at its own most precise shape.
+    expect(other[0]).toBe('"www.mtcr.info/en/other-page"');
+  });
+
+  it('does not widen a bare-domain monitor past its own domain', async () => {
+    const attempted = onlyProductiveFor(/never-matches/, []);
+
+    await scrapeWithProvider('brave', 'https://example.com', 30);
+
+    expect(attempted.every((q) => q.includes('example.com'))).toBe(true);
+  });
+});
+
 describe('the query is not part of the content', () => {
   it('leaves the query out of the hashed body', async () => {
     mockBrave({ web: [braveWebResult('https://example.com/a', 'Page A', '1 day ago')] });
@@ -421,10 +538,10 @@ describe('the query is not part of the content', () => {
     // How we looked is configuration, not content: baking it into the snapshot
     // made changing our own query strategy read as a change to the site.
     // (Checking for a bare 'site:' would false-positive on "Website:".)
-    expect(contentText).not.toContain('site:example.com');
     expect(contentText).not.toContain('Query scope');
+    expect(contentText).not.toContain('Brave query');
     // It still reaches the report.
-    expect(notes.join(' ')).toContain('site:example.com/docs');
+    expect(notes.join(' ')).toContain('example.com/docs');
   });
 
   it('gives identical content for identical results found by different queries', async () => {
