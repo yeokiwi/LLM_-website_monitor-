@@ -10,15 +10,11 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { exportWebsites, downloadBlob, readBlobError } from '../api/client';
-import { useAuth } from '../context/AuthContext';
 import s from './DataBackup.module.css';
 
 export default function DataBackup() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-
-  const { can } = useAuth();
-  const unlocked = can('excel_import_export');
 
   async function handleExportWebsites() {
     setError('');
@@ -27,26 +23,12 @@ export default function DataBackup() {
       const response = await exportWebsites();
       downloadBlob(response, 'websites.xlsx');
     } catch (err) {
-      // Blob requests deliver their errors as a Blob, so unwrap it. A 402 has
-      // already opened the shared upgrade prompt; nothing to add inline.
+      // Blob requests deliver their errors as a Blob, so unwrap it.
       const body = await readBlobError(err);
-      if (err.response?.status !== 402) {
-        setError(body.error || 'Failed to export websites');
-      }
+      setError(body.error || 'Failed to export websites');
     } finally {
       setBusy(false);
     }
-  }
-
-  if (!unlocked) {
-    return (
-      <div className={s.wrap}>
-        <span className={s.hint}>
-          Spreadsheet import and export are part of the Business plan.{' '}
-          <Link to="/pricing" className={s.link}>See plans</Link>
-        </span>
-      </div>
-    );
   }
 
   return (
@@ -57,8 +39,7 @@ export default function DataBackup() {
         </button>
       </div>
       <span className={s.hint}>
-        The exported columns round-trip with the importer above. For your full
-        scan history, use <Link to="/account/billing" className={s.link}>Export my data</Link>.
+        The exported columns round-trip with the importer above.
       </span>
 
       {error && <p className={s.error}>{error}</p>}

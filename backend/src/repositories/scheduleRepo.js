@@ -38,7 +38,7 @@ function listForOwner(ownerId) {
  * Create or replace the schedule for a website.
  *
  * The first run is placed one interval out rather than immediately, so turning
- * on a daily schedule does not fire a scan (and spend a quota unit) the moment
+ * on a daily schedule does not fire a scan (and spend real money) the moment
  * the toggle is flipped.
  */
 function upsert(ownerId, websiteId, { frequency, periodDays = 30, isEnabled = true }) {
@@ -114,27 +114,6 @@ function markRun(scheduleId, status) {
   ).run(status, scheduleId);
 }
 
-/**
- * Disable schedules whose frequency the owner's plan no longer permits.
- * Called after a downgrade so an hourly schedule cannot outlive the plan that
- * paid for it.
- */
-function disableDisallowed(ownerId, allowedFrequencies) {
-  if (!Array.isArray(allowedFrequencies) || allowedFrequencies.length === 0) {
-    return db
-      .prepare('UPDATE schedules SET is_enabled = 0 WHERE owner_id = ? AND is_enabled = 1')
-      .run(ownerId).changes;
-  }
-
-  const placeholders = allowedFrequencies.map(() => '?').join(',');
-  return db
-    .prepare(
-      `UPDATE schedules SET is_enabled = 0
-        WHERE owner_id = ? AND is_enabled = 1 AND frequency NOT IN (${placeholders})`
-    )
-    .run(ownerId, ...allowedFrequencies).changes;
-}
-
 module.exports = {
   FREQUENCIES,
   INTERVAL_MS,
@@ -146,5 +125,4 @@ module.exports = {
   removeForWebsite,
   claimDue,
   markRun,
-  disableDisallowed,
 };

@@ -2,12 +2,11 @@
  * Rate limiting.
  *
  * The auth endpoints previously had none, which made the login route
- * brute-forceable. Signup and password reset also need a cap: both send email
- * and create rows on an unauthenticated request.
+ * brute-forceable — and with a single shared password that is the only thing
+ * standing between an attacker and the whole deployment.
  */
 
 const rateLimit = require('express-rate-limit');
-const { ipKeyGenerator } = require('express-rate-limit');
 
 const DISABLED = /^(1|true|yes)$/i.test(process.env.DISABLE_RATE_LIMIT || '');
 
@@ -22,7 +21,7 @@ function limiter(options) {
   });
 }
 
-/** Login, signup, password reset — keyed per IP. */
+/** Login — keyed per IP. */
 const authLimiter = limiter({
   windowMs: 15 * 60 * 1000,
   limit: 20,
@@ -33,18 +32,18 @@ const authLimiter = limiter({
 
 /**
  * General API ceiling. Generous — it exists to stop a runaway client or a
- * scripted abuser, not to shape normal use. Plan quotas do the commercial
- * limiting.
+ * scripted abuser, not to shape normal use.
  */
 const apiLimiter = limiter({
   windowMs: 60 * 1000,
   limit: 120,
   message: { error: 'Too many requests. Slow down and try again shortly.' },
-  // Signed-in callers are keyed per account so one busy office network does not
-  // throttle everyone behind it. `ipKeyGenerator` normalises IPv6 into a /64
-  // block, which a raw `req.ip` would let a client trivially rotate around.
-  keyGenerator: (req, res) =>
-    req.user ? `u:${req.user.userId}` : ipKeyGenerator(req, res),
+  // No custom keyGenerator: the default keys per client IP and normalises IPv6
+  // into a /64 block, which a raw `req.ip` would let a client rotate around.
+  //
+  // Signed-in callers used to be keyed per account. That made sense with one
+  // account per customer; with a single shared login it would put every client
+  // in the building into one bucket, and a bulk scan would trip it.
 });
 
 module.exports = { authLimiter, apiLimiter, limiter };

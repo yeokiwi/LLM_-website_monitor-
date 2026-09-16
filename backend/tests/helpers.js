@@ -74,50 +74,30 @@ function resetModules() {
   }
 }
 
-/** Sign up and return `{ token, user, ... }`. */
-async function signup(request, app, email, password = 'correct-horse-battery') {
-  const res = await request(app)
-    .post('/api/auth/signup')
-    .send({ email, password });
+/**
+ * Sign in with the shared credentials createTestApp put in the environment.
+ * There is one login, so this is how every suite authenticates.
+ *
+ * @returns {{ token: string, username: string, expiresIn: string }}
+ */
+async function signIn(request, app, username, password) {
+  const res = await request(app).post('/api/auth/login').send({
+    username: username ?? process.env.AUTH_USERNAME,
+    password: password ?? process.env.AUTH_PASSWORD,
+  });
 
-  if (res.status !== 201) {
-    throw new Error(`signup failed for ${email}: ${res.status} ${JSON.stringify(res.body)}`);
+  if (res.status !== 200) {
+    throw new Error(`sign in failed: ${res.status} ${JSON.stringify(res.body)}`);
   }
   return res.body;
 }
 
-async function login(request, app, email, password) {
-  const res = await request(app).post('/api/auth/login').send({ email, password });
-  if (res.status !== 200) {
-    throw new Error(`login failed for ${email}: ${res.status} ${JSON.stringify(res.body)}`);
-  }
-  return res.body;
+/** The id of the single account that owns every row. */
+function ownerId(db) {
+  return db.prepare('SELECT id FROM users ORDER BY id ASC LIMIT 1').get().id;
 }
 
 /** Attach a bearer token to a supertest request. */
 const as = (req, token) => req.set('Authorization', `Bearer ${token}`);
 
-/**
- * Move an account onto a plan without going through a payment gateway.
- * Mirrors what a webhook would do, so quota tests can exercise paid tiers.
- */
-function grantPlan(db, userId, planSlug, status = 'active') {
-  const plan = db.prepare('SELECT id FROM plans WHERE slug = ?').get(planSlug);
-  const now = new Date();
-  const end = new Date(now.getTime() + 30 * 86_400_000);
-
-  db.prepare(
-    `INSERT INTO subscriptions (user_id, plan_id, status, provider, provider_sub_id,
-                                current_period_start, current_period_end)
-     VALUES (?, ?, ?, 'stripe', ?, ?, ?)`
-  ).run(
-    userId,
-    plan.id,
-    status,
-    `sub_test_${userId}_${planSlug}`,
-    now.toISOString(),
-    end.toISOString()
-  );
-}
-
-module.exports = { createTestApp, signup, login, as, grantPlan, resetModules };
+module.exports = { createTestApp, signIn, ownerId, as, resetModules };

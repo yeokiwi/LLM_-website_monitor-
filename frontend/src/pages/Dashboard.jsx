@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import AddWebsiteForm from '../components/AddWebsiteForm';
 import ExcelUpload from '../components/ExcelUpload';
 import WebsiteList from '../components/WebsiteList';
@@ -8,7 +7,6 @@ import ScanResultCard from '../components/ScanResultCard';
 import DataBackup from '../components/DataBackup';
 import { getWebsites, deleteWebsite, bulkDeleteWebsites, updateWebsite, bulkUpdateWebsites } from '../api/client';
 import { useScan } from '../context/ScanContext';
-import { useAuth } from '../context/AuthContext';
 import s from './Dashboard.module.css';
 
 export default function Dashboard() {
@@ -19,10 +17,6 @@ export default function Dashboard() {
 
   // Scan state lives in ScanContext so it survives navigation away and back
   const { scanning, progress, scanResults, error: scanError, startScan } = useScan();
-
-  // Every subscriber manages their own websites, so there is no admin gate
-  // here any more — what varies by plan is the allowance and the extras.
-  const { usage, plan, entitlements, refresh } = useAuth();
 
   const loadWebsites = useCallback(async () => {
     try {
@@ -101,18 +95,10 @@ export default function Dashboard() {
   function handleScan() {
     // startScan is fire-and-forget from Dashboard's perspective; state
     // is managed in ScanContext and persists across navigation.
-    // Refresh the account afterwards so the header's usage meter reflects the
-    // scans that were just spent.
     startScan(selected, period, websites).then(() => {
       loadWebsites();
-      refresh();
     });
   }
-
-  const websiteLimit = usage?.websites?.limit ?? null;
-  const atWebsiteLimit = websiteLimit !== null && websites.length >= websiteLimit;
-  const scansLeft = usage?.scans?.remaining ?? null;
-  const notEnoughScans = scansLeft !== null && selected.length > scansLeft;
 
   return (
     <div className={s.page}>
@@ -120,31 +106,15 @@ export default function Dashboard() {
       <section className={s.card}>
         <div className={s.listHeader}>
           <h2 className={s.sectionTitle}>Add Websites</h2>
-          {websiteLimit !== null && (
-            <span className={atWebsiteLimit ? s.quotaFull : s.quota}>
-              {websites.length} of {websiteLimit} used
-            </span>
-          )}
         </div>
 
-        {atWebsiteLimit ? (
-          <p className={s.upsell}>
-            You have used all {websiteLimit} website slots on the {plan?.name} plan.{' '}
-            <Link to="/pricing" className={s.upsellLink}>Upgrade to add more</Link>, or
-            remove a site below.
-          </p>
-        ) : (
-          <>
-            <div className={s.addRow}>
-              <AddWebsiteForm onAdded={(w) => {
-                setWebsites((prev) => [w, ...prev.filter((x) => x.id !== w.id)]);
-                refresh();
-              }} />
-            </div>
-            <div className={s.divider}>or</div>
-          </>
-        )}
-        <ExcelUpload onImported={() => { loadWebsites(); refresh(); }} />
+        <div className={s.addRow}>
+          <AddWebsiteForm onAdded={(w) => {
+            setWebsites((prev) => [w, ...prev.filter((x) => x.id !== w.id)]);
+          }} />
+        </div>
+        <div className={s.divider}>or</div>
+        <ExcelUpload onImported={() => loadWebsites()} />
         <DataBackup />
       </section>
 
@@ -165,26 +135,12 @@ export default function Dashboard() {
             <button
               className={s.scanBtn}
               onClick={handleScan}
-              disabled={scanning || selected.length === 0 || notEnoughScans}
-              title={
-                notEnoughScans
-                  ? `Only ${scansLeft} scan${scansLeft === 1 ? '' : 's'} left this period`
-                  : undefined
-              }
+              disabled={scanning || selected.length === 0}
             >
               {scanning ? 'Scanning…' : `Scan Selected (${selected.length})`}
             </button>
           </div>
         </div>
-
-        {notEnoughScans && (
-          <p className={s.upsell}>
-            {scansLeft === 0
-              ? `You have used all ${usage.scans.limit} scans included in the ${plan?.name} plan this period.`
-              : `Only ${scansLeft} scan${scansLeft === 1 ? '' : 's'} remain this period — you have ${selected.length} selected.`}{' '}
-            <Link to="/pricing" className={s.upsellLink}>See plans</Link>
-          </p>
-        )}
 
         {/* Per-site progress bar */}
         {progress && (
@@ -210,7 +166,6 @@ export default function Dashboard() {
           websites={websites}
           selected={selected}
           canManage
-          allowedEngines={entitlements.engines || ['direct']}
           onToggle={handleToggle}
           onSelectAll={setSelected}
           onDelete={handleDelete}

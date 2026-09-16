@@ -7,7 +7,6 @@ import {
   removeSchedule,
   errorMessage,
 } from '../api/client';
-import { useAuth } from '../context/AuthContext';
 import s from './SchedulesPage.module.css';
 
 const FREQUENCY_LABELS = { hourly: 'Every hour', daily: 'Every day', weekly: 'Every week' };
@@ -27,7 +26,6 @@ export default function SchedulesPage() {
   const [busyId, setBusyId] = useState(null);
   const [loaded, setLoaded] = useState(false);
 
-  const { plan } = useAuth();
 
   const load = useCallback(async () => {
     try {
@@ -57,11 +55,7 @@ export default function SchedulesPage() {
       }
       await load();
     } catch (err) {
-      // A 402 already surfaces through the shared upgrade modal; anything else
-      // is worth showing inline.
-      if (err.response?.status !== 402) {
-        setError(errorMessage(err, 'Could not update the schedule'));
-      }
+      setError(errorMessage(err, 'Could not update the schedule'));
     } finally {
       setBusyId(null);
     }
@@ -86,17 +80,6 @@ export default function SchedulesPage() {
       </header>
 
       {error && <p className={s.error}>{error}</p>}
-
-      {schedulingLocked && (
-        <div className={s.locked}>
-          <p className={s.lockedTitle}>Scheduled scans are not part of the {plan?.name} plan</p>
-          <p className={s.lockedBody}>
-            Upgrade to have your sites checked automatically, with an email when
-            something changes.
-          </p>
-          <Link to="/pricing" className={s.upgradeBtn}>See plans</Link>
-        </div>
-      )}
 
       {websites.length === 0 ? (
         <p className={s.empty}>

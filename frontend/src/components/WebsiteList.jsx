@@ -81,12 +81,6 @@ export default function WebsiteList({
   websites,
   selected,
   canManage = true,
-  /**
-   * Scraper engines the current plan includes. An engine outside this list is
-   * shown disabled rather than hidden, so the customer can see what upgrading
-   * would give them. The server enforces the same list regardless.
-   */
-  allowedEngines = ['direct', 'firecrawl', 'brave', 'serper'],
   onToggle,
   onSelectAll,
   onDelete,
@@ -94,7 +88,6 @@ export default function WebsiteList({
   onToggleScraperAll,
   onSaveRemark,
 }) {
-  const engineAllowed = (engine) => allowedEngines.includes(engine);
   const [sortBy, setSortBy] = useState(null);
   const [sortDir, setSortDir] = useState('asc');
 
@@ -224,20 +217,15 @@ export default function WebsiteList({
                   ['brave', 'use_brave', 'Brave'],
                   ['serper', 'use_serper', 'Serper'],
                 ].map(([engine, field, label]) => {
-                  const locked = !engineAllowed(engine);
                   return (
-                    <label
-                      key={engine}
-                      className={locked ? s.scraperOptionLocked : s.scraperOption}
-                      title={locked ? `${label} is not included in your plan` : undefined}
-                    >
+                    <label key={engine} className={s.scraperOption}>
                       <input
                         type="checkbox"
-                        // A locked engine shows unchecked even when the stored
-                        // flag is on: the scan will fall back to a direct
-                        // scrape, and a ticked box would claim otherwise.
-                        checked={!!w[field] && !locked}
-                        disabled={!canManage || locked}
+                        // An engine the deployment has no API key for still
+                        // shows its stored flag; the scan falls back to a
+                        // direct scrape.
+                        checked={!!w[field]}
+                        disabled={!canManage}
                         onChange={(e) => onToggleScraper?.(w.id, field, e.target.checked)}
                       />
                       {label}

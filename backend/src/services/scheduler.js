@@ -22,9 +22,6 @@ const cron = require('node-cron');
 const scheduleRepo = require('../repositories/scheduleRepo');
 const userRepo = require('../repositories/userRepo');
 const scanRepo = require('../repositories/scanRepo');
-const usageRepo = require('../repositories/usageRepo');
-const subscriptionRepo = require('../repositories/subscriptionRepo');
-const entitlements = require('./entitlements');
 const { runSingleScan } = require('./scanService');
 const mailer = require('./mailer');
 const emails = require('./emails');
@@ -32,8 +29,16 @@ const emails = require('./emails');
 /** How many schedules one tick will process. Keeps a tick bounded. */
 const BATCH_SIZE = 25;
 
-/** Warn a customer once per period when they cross this share of their scans. */
-const WARN_AT = 0.8;
+/**
+ * How long scan history is kept, in days. Unset means keep everything.
+ *
+ * Snapshot bodies are the bulk of the database, so on a long-running instance
+ * this is the difference between a file that stabilises and one that does not.
+ */
+function retentionDays() {
+  const configured = parseInt(process.env.HISTORY_RETENTION_DAYS, 10);
+  return Number.isFinite(configured) && configured > 0 ? configured : null;
+}
 
 let task = null;
 let running = false;
@@ -50,21 +55,6 @@ function isEnabled() {
  */
 async function runSchedule(row) {
   const ownerId = row.owner_id;
-
-  // Re-check the plan at run time. A downgrade between the schedule being
-  // created and it firing must not keep a cadence the customer no longer pays
-  // for — and the entitlement check in the route cannot see the future.
-  const allowedFrequencies = entitlements.allowedSchedules(ownerId);
-  if (!allowedFrequencies.includes(row.frequency)) {
-    scheduleRepo.disableDisallowed(ownerId, allowedFrequencies);
-    return 'plan_disallows';
-  }
-
-  const remaining = entitlements.remainingScans(ownerId);
-  if (remaining !== null && remaining < 1) {
-    await warnQuotaExhausted(ownerId);
-    return 'quota_exceeded';
-  }
 
   const website = {
     id: row.website_id,
@@ -84,16 +74,12 @@ async function runSchedule(row) {
     await notifyChangeDetected(ownerId, website, result);
   }
 
-  await maybeWarnApproachingQuota(ownerId);
-
   return result.status;
 }
 
 async function notifyChangeDetected(ownerId, website, result) {
-  if (!entitlements.hasFeature(ownerId, 'email_alerts')) return;
-
   const user = userRepo.findById(ownerId);
-  if (!user || !user.notify_changes || !result.scanId) return;
+  if (!user || !result.scanId) return;
 
   const message = emails.changeDetected({
     websiteName: website.name,
@@ -102,45 +88,9 @@ async function notifyChangeDetected(ownerId, website, result) {
     summary: result.llm_summary,
   });
 
+  // `mailer.send` logs instead of sending when SMTP is not configured, which is
+  // also how alerts are turned off: there is no per-account preference to read.
   await mailer.send({ to: user.email, ...message });
-}
-
-/** One "you are running low" email per billing period, not per scan. */
-async function maybeWarnApproachingQuota(ownerId) {
-  const usage = entitlements.getUsage(ownerId);
-  const { limit, used } = usage.scans;
-
-  if (limit === null || used < limit * WARN_AT || used >= limit) return;
-
-  const counters = usageRepo.get(ownerId, usage.window);
-  if (counters.warned_at) return;
-
-  const user = userRepo.findById(ownerId);
-  if (!user || !user.notify_billing) return;
-
-  usageRepo.markWarned(ownerId, usage.window);
-  await mailer.send({
-    to: user.email,
-    ...emails.quotaWarning({ used, limit, periodEnd: usage.window.periodEnd }),
-  });
-}
-
-async function warnQuotaExhausted(ownerId) {
-  const usage = entitlements.getUsage(ownerId);
-  const counters = usageRepo.get(ownerId, usage.window);
-  if (counters.warned_at) return;
-
-  const user = userRepo.findById(ownerId);
-  if (!user || !user.notify_billing) return;
-
-  usageRepo.markWarned(ownerId, usage.window);
-  await mailer.send({
-    to: user.email,
-    ...emails.quotaExhausted({
-      limit: usage.scans.limit,
-      periodEnd: usage.window.periodEnd,
-    }),
-  });
 }
 
 /**
@@ -183,10 +133,10 @@ async function tick() {
 function pruneRetention() {
   const users = userRepo.listAll(10_000, 0);
 
-  for (const user of users) {
-    const retention = entitlements.getEntitlements(user.id).history_retention_days;
-    if (!retention) continue;
+  const retention = retentionDays();
+  if (!retention) return;
 
+  for (const user of users) {
     const { scans, snapshots } = scanRepo.pruneHistory(user.id, retention);
     if (scans > 0 || snapshots > 0) {
       console.log(

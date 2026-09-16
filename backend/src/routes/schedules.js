@@ -1,17 +1,15 @@
 /**
  * Scheduled scans.
  *
- * A schedule is per-website and plan-gated: which cadences a customer may pick
- * comes from their entitlements, and is re-checked when the scheduler fires so
- * a downgrade cannot leave an hourly schedule running.
+ * A schedule is per-website: a cadence, a monitoring period, and the next time
+ * it is due. The scheduler claims due work and runs the same scan path a manual
+ * trigger does.
  */
 
 const express = require('express');
 
 const scheduleRepo = require('../repositories/scheduleRepo');
 const websiteRepo = require('../repositories/websiteRepo');
-const entitlements = require('../services/entitlements');
-const { suggestPlanFor } = require('../middleware/entitlements');
 
 const router = express.Router();
 
@@ -21,7 +19,7 @@ const router = express.Router();
 router.get('/', (req, res) => {
   res.json({
     schedules: scheduleRepo.listForOwner(req.user.userId),
-    allowedFrequencies: entitlements.allowedSchedules(req.user.userId),
+    allowedFrequencies: scheduleRepo.FREQUENCIES,
   });
 });
 
@@ -38,20 +36,6 @@ router.put('/:websiteId', (req, res) => {
   if (!scheduleRepo.FREQUENCIES.includes(frequency)) {
     return res.status(400).json({
       error: `frequency must be one of: ${scheduleRepo.FREQUENCIES.join(', ')}`,
-    });
-  }
-
-  const allowed = entitlements.allowedSchedules(req.user.userId);
-  if (!allowed.includes(frequency)) {
-    return res.status(402).json({
-      error:
-        allowed.length === 0
-          ? 'Scheduled scans are not included in your current plan'
-          : `Your plan supports ${allowed.join(' and ')} schedules`,
-      code: 'FEATURE_LOCKED',
-      feature: 'schedules',
-      allowedFrequencies: allowed,
-      upgradeTo: suggestPlanFor((e) => (e.schedules || []).includes(frequency)),
     });
   }
 

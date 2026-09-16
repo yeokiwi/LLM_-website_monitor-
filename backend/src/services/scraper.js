@@ -202,6 +202,30 @@ function resolveScraperProvider() {
   return 'direct';
 }
 
+/** Which engines the deployment holds an API key for. `direct` needs none. */
+const ENGINE_KEY_ENV = {
+  firecrawl: 'FIRECRAWL_API_KEY',
+  brave: 'BRAVE_API_KEY',
+  serper: 'SERPER_API_KEY',
+};
+
+/**
+ * Filter requested engines down to the ones this deployment can actually run.
+ *
+ * Selecting an engine whose key is missing fails every scan for that engine, so
+ * the check belongs next to `resolveScraperProvider`, which already encodes the
+ * same key precedence — rather than in a caller that would drift from it.
+ *
+ * @param {string[]} requested
+ * @returns {string[]}
+ */
+function availableEngines(requested) {
+  return requested.filter((engine) => {
+    const key = ENGINE_KEY_ENV[engine];
+    return !key || Boolean(process.env[key]);
+  });
+}
+
 /**
  * Scrape with an explicitly named provider (bypasses auto-resolution).
  * Used when a website opts into specific engines (Firecrawl and/or Brave).
@@ -764,6 +788,7 @@ function extractDomain(url) {
 module.exports = {
   scrapeWebsite,
   scrapeWithProvider,
+  availableEngines,
   scrapePdf,
   isPdfUrl,
   extractDomain,

@@ -11,25 +11,10 @@ export const storeToken = (token) => localStorage.setItem(TOKEN_KEY, token);
 
 export const clearSession = () => {
   localStorage.removeItem(TOKEN_KEY);
-  // Clear the keys the previous username/role session used, so an upgrade does
-  // not leave stale identity behind in the browser.
+  // Clear the keys older sessions used, so a stale identity is not left behind
+  // in the browser after an upgrade.
   ['wm_user', 'wm_role'].forEach((k) => localStorage.removeItem(k));
 };
-
-// ── Paywall events ────────────────────────────────────────────────────────────
-// A 402 from any endpoint means "your plan does not cover this". Rather than
-// every caller handling it, the interceptor publishes it and the app shows one
-// shared upgrade prompt.
-const paywallListeners = new Set();
-
-export function onPaywall(listener) {
-  paywallListeners.add(listener);
-  return () => paywallListeners.delete(listener);
-}
-
-function emitPaywall(detail) {
-  paywallListeners.forEach((listener) => listener(detail));
-}
 
 // ── Request interceptor — attach JWT to every request ────────────────────────
 api.interceptors.request.use((config) => {
@@ -41,27 +26,17 @@ api.interceptors.request.use((config) => {
 });
 
 // ── Response interceptor ─────────────────────────────────────────────────────
-const PUBLIC_AUTH_PATHS = [
-  '/auth/login',
-  '/auth/signup',
-  '/auth/forgot-password',
-  '/auth/reset-password',
-  '/auth/verify-email',
-];
-
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     const status = error.response?.status;
     const url = error.config?.url || '';
 
-    if (status === 401 && !PUBLIC_AUTH_PATHS.includes(url)) {
+    // A 401 on the login request itself is just a wrong password; anywhere else
+    // it means the session died and the form should be shown again.
+    if (status === 401 && url !== '/auth/login') {
       clearSession();
       window.location.href = '/login';
-    }
-
-    if (status === 402) {
-      emitPaywall(error.response.data || {});
     }
 
     return Promise.reject(error);
@@ -73,49 +48,10 @@ export const errorMessage = (err, fallback = 'Something went wrong') =>
   err?.response?.data?.error || err?.message || fallback;
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
-export const signup = (email, password, name) =>
-  api.post('/auth/signup', { email, password, name }).then((r) => r.data);
-
-export const login = (email, password) =>
-  api.post('/auth/login', { email, password }).then((r) => r.data);
+export const login = (username, password) =>
+  api.post('/auth/login', { username, password }).then((r) => r.data);
 
 export const getMe = () => api.get('/auth/me').then((r) => r.data);
-
-export const verifyEmail = (token) =>
-  api.post('/auth/verify-email', { token }).then((r) => r.data);
-
-export const resendVerification = () =>
-  api.post('/auth/resend-verification').then((r) => r.data);
-
-export const forgotPassword = (email) =>
-  api.post('/auth/forgot-password', { email }).then((r) => r.data);
-
-export const resetPassword = (token, password) =>
-  api.post('/auth/reset-password', { token, password }).then((r) => r.data);
-
-export const changePassword = (currentPassword, newPassword) =>
-  api.post('/auth/change-password', { currentPassword, newPassword }).then((r) => r.data);
-
-export const updatePreferences = (prefs) =>
-  api.patch('/auth/me', prefs).then((r) => r.data);
-
-// ── Billing ───────────────────────────────────────────────────────────────────
-export const getPlans = () => api.get('/billing/plans').then((r) => r.data);
-
-export const getSubscription = () =>
-  api.get('/billing/subscription').then((r) => r.data);
-
-export const startCheckout = (planSlug, provider) =>
-  api.post('/billing/checkout', { planSlug, provider }).then((r) => r.data);
-
-export const openBillingPortal = () =>
-  api.post('/billing/portal').then((r) => r.data);
-
-export const activatePaypal = (subscriptionId) =>
-  api.post('/billing/paypal/activate', { subscriptionId }).then((r) => r.data);
-
-export const cancelSubscription = () =>
-  api.post('/billing/cancel').then((r) => r.data);
 
 // ── Websites ──────────────────────────────────────────────────────────────────
 export const getWebsites = () => api.get('/websites').then((r) => r.data);
@@ -183,8 +119,8 @@ export const downloadBlob = (response, fallbackName) => {
 
 /**
  * A blob response can still be an error — axios does not parse the JSON body
- * when responseType is 'blob', so a 402 arrives as a Blob of JSON. Read it back
- * so the paywall handler gets real data rather than "[object Blob]".
+ * when responseType is 'blob', so the error arrives as a Blob of JSON. Read it
+ * back so the caller gets a real message rather than "[object Blob]".
  */
 export async function readBlobError(err) {
   const data = err?.response?.data;
@@ -221,15 +157,6 @@ export const exportScansPdf = (ids) =>
     responseType: 'blob',
     params: ids && ids.length ? { ids: ids.join(',') } : undefined,
   });
-
-// ── Admin (platform operator) ─────────────────────────────────────────────────
-export const getAdminStats = () => api.get('/admin/stats').then((r) => r.data);
-
-export const getAdminUsers = (limit = 50, offset = 0) =>
-  api.get('/admin/users', { params: { limit, offset } }).then((r) => r.data);
-
-export const getAdminSubscriptions = (limit = 50, offset = 0) =>
-  api.get('/admin/subscriptions', { params: { limit, offset } }).then((r) => r.data);
 
 // ── Health ────────────────────────────────────────────────────────────────────
 export const getHealth = () => api.get('/health').then((r) => r.data);

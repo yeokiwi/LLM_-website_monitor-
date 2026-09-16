@@ -4,19 +4,10 @@ import { Routes, Route, NavLink, Navigate, useLocation, Outlet } from 'react-rou
 import Dashboard from './pages/Dashboard';
 import History from './pages/History';
 import LoginPage from './pages/LoginPage';
-import SignupPage from './pages/SignupPage';
-import ForgotPasswordPage from './pages/ForgotPasswordPage';
-import ResetPasswordPage from './pages/ResetPasswordPage';
-import VerifyEmailPage from './pages/VerifyEmailPage';
-import PricingPage from './pages/PricingPage';
-import BillingPage from './pages/BillingPage';
 import SchedulesPage from './pages/SchedulesPage';
-import AdminPage from './pages/AdminPage';
 import ReportPage from './pages/ReportPage';
 import HelpPage from './pages/HelpPage';
 
-import UpgradeModal from './components/UpgradeModal';
-import UsageMeter from './components/UsageMeter';
 import { ScanProvider, useScan } from './context/ScanContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { getHealth } from './api/client';
@@ -26,7 +17,7 @@ import styles from './App.module.css';
 // Route guards
 // ---------------------------------------------------------------------------
 
-/** Requires a signed-in account; remembers where the user was headed. */
+/** Requires a signed-in session; remembers where the user was headed. */
 function RequireAuth() {
   const { loading, isAuthenticated } = useAuth();
   const location = useLocation();
@@ -37,14 +28,7 @@ function RequireAuth() {
   return <Outlet />;
 }
 
-/** Platform operator only. */
-function RequireSuperadmin() {
-  const { isSuperadmin } = useAuth();
-  if (!isSuperadmin) return <Navigate to="/" replace />;
-  return <Outlet />;
-}
-
-/** Keeps a signed-in user out of the sign-in and sign-up screens. */
+/** Keeps a signed-in user out of the sign-in screen. */
 function RedirectIfAuthenticated({ children }) {
   const { loading, isAuthenticated } = useAuth();
   if (loading) return <div className={styles.loading}>Loading…</div>;
@@ -55,9 +39,9 @@ function RedirectIfAuthenticated({ children }) {
 // ---------------------------------------------------------------------------
 // Signed-in shell
 // ---------------------------------------------------------------------------
-function AppShell({ children }) {
+function AppShell() {
   const { scanning, progress } = useScan();
-  const { user, plan, isSuperadmin, logout } = useAuth();
+  const { username, logout } = useAuth();
   const [health, setHealth] = useState(null);
 
   useEffect(() => {
@@ -77,7 +61,6 @@ function AppShell({ children }) {
             <NavLink to="/history" className={navClass}>Scan History</NavLink>
             <NavLink to="/schedules" className={navClass}>Schedules</NavLink>
             <NavLink to="/help" className={navClass}>Help</NavLink>
-            {isSuperadmin && <NavLink to="/admin" className={navClass}>Platform</NavLink>}
           </nav>
 
           <div className={styles.right}>
@@ -97,8 +80,6 @@ function AppShell({ children }) {
               </div>
             )}
 
-            <UsageMeter />
-
             {health && (
               <div className={styles.badge}>
                 <span className={health.status === 'ok' ? styles.dot : styles.dotErr} />
@@ -107,12 +88,9 @@ function AppShell({ children }) {
             )}
 
             <div className={styles.userInfo}>
-              <NavLink to="/account/billing" className={styles.userName} title={user?.email}>
-                {/* Truncated in CSS — a long email would otherwise wrap the
-                    whole header onto two lines. */}
-                <span className={styles.userLabel}>{user?.name || user?.email}</span>
-                <span className={styles.roleTag}>{plan?.name || 'Free'}</span>
-              </NavLink>
+              <span className={styles.userName}>
+                <span className={styles.userLabel}>{username}</span>
+              </span>
               <button className={styles.logoutBtn} onClick={logout}>
                 Sign out
               </button>
@@ -121,44 +99,8 @@ function AppShell({ children }) {
         </div>
       </header>
 
-      {/* `children` is used by the routes that render inside the shell without
-          being nested under it — /pricing, which is also reachable signed out. */}
-      <main className={styles.main}>{children || <Outlet />}</main>
+      <main className={styles.main}><Outlet /></main>
     </div>
-  );
-}
-
-/** Minimal chrome for pages a signed-out visitor can reach. */
-function PublicLayout({ children }) {
-  return (
-    <div className={styles.app}>
-      <header className={styles.header}>
-        <div className={styles.headerInner}>
-          <NavLink to="/login" className={styles.logo}>🔍 Website Monitor</NavLink>
-          <div className={styles.right}>
-            <NavLink to="/login" className={styles.publicLink}>Sign in</NavLink>
-            <NavLink to="/signup" className={styles.publicCta}>Get started</NavLink>
-          </div>
-        </div>
-      </header>
-      <main className={styles.main}>{children}</main>
-    </div>
-  );
-}
-
-/**
- * Pricing is public, but a signed-in customer should see it with their normal
- * navigation rather than being dropped into a marketing shell.
- */
-function PricingRoute() {
-  const { loading, isAuthenticated } = useAuth();
-
-  if (loading) return <div className={styles.loading}>Loading…</div>;
-
-  return isAuthenticated ? (
-    <AppShell><PricingPage /></AppShell>
-  ) : (
-    <PublicLayout><PricingPage /></PublicLayout>
   );
 }
 
@@ -169,23 +111,12 @@ export default function App() {
   return (
     <AuthProvider>
       <ScanProvider>
-        {/* One shared paywall prompt for every 402 the API returns. */}
-        <UpgradeModal />
-
         <Routes>
           {/* Public */}
           <Route
             path="/login"
             element={<RedirectIfAuthenticated><LoginPage /></RedirectIfAuthenticated>}
           />
-          <Route
-            path="/signup"
-            element={<RedirectIfAuthenticated><SignupPage /></RedirectIfAuthenticated>}
-          />
-          <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-          <Route path="/reset-password" element={<ResetPasswordPage />} />
-          <Route path="/verify-email" element={<VerifyEmailPage />} />
-          <Route path="/pricing" element={<PricingRoute />} />
 
           {/* Signed in */}
           <Route element={<RequireAuth />}>
@@ -195,11 +126,6 @@ export default function App() {
               <Route path="/schedules" element={<SchedulesPage />} />
               <Route path="/report/:id" element={<ReportPage />} />
               <Route path="/help" element={<HelpPage />} />
-              <Route path="/account/billing" element={<BillingPage />} />
-
-              <Route element={<RequireSuperadmin />}>
-                <Route path="/admin" element={<AdminPage />} />
-              </Route>
             </Route>
           </Route>
 

@@ -109,12 +109,9 @@ export default function History() {
       const res = await exportScansPdf(ids);
       downloadBlob(res, 'scan-reports.pdf');
     } catch (err) {
-      // PDF export is a paid feature; a 402 already opens the shared upgrade
-      // prompt, so adding an inline error on top would just be noise.
-      if (err.response?.status !== 402) {
-        const body = await readBlobError(err);
-        setExportError(body.error || 'Failed to export reports to PDF');
-      }
+      // Blob requests deliver their errors as a Blob, so unwrap it.
+      const body = await readBlobError(err);
+      setExportError(body.error || 'Failed to export reports to PDF');
     } finally {
       setExporting(false);
     }

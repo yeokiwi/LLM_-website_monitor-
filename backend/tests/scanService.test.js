@@ -13,7 +13,7 @@
  * happen first.
  */
 
-const { createTestApp, signup, grantPlan, resetModules } = require('./helpers');
+const { createTestApp, ownerId: seededOwnerId, resetModules } = require('./helpers');
 
 let harness;
 let db;
@@ -47,10 +47,7 @@ beforeAll(async () => {
     SERPER_API_KEY: 'test-serper',
   });
 
-  const request = require('supertest');
-  const account = await signup(request, harness.app, 'scan-service@test.local');
-  ownerId = account.user.id;
-  grantPlan(harness.db, ownerId, 'pro');
+  ownerId = seededOwnerId(harness.db);
 
   websiteId = harness.db
     .prepare(
@@ -101,6 +98,41 @@ async function scan(site, periodDays = 30) {
 }
 
 describe('resolveProviders', () => {
+  it('never selects an engine the deployment has no key for', () => {
+    // Carried over from the entitlements suite: the check is about API keys,
+    // not about what a plan permits.
+    const original = process.env.BRAVE_API_KEY;
+    delete process.env.BRAVE_API_KEY;
+    try {
+      const { providers } = scanService.resolveProviders(
+        { use_firecrawl: 1, use_brave: 1, use_serper: 0 },
+        ownerId
+      );
+
+      expect(providers).not.toContain('brave');
+      expect(providers).toContain('firecrawl');
+    } finally {
+      process.env.BRAVE_API_KEY = original;
+    }
+  });
+
+  it('falls back to a direct scrape when no configured engine is available', () => {
+    const keys = ['FIRECRAWL_API_KEY', 'BRAVE_API_KEY', 'SERPER_API_KEY'];
+    const original = keys.map((k) => [k, process.env[k]]);
+    keys.forEach((k) => delete process.env[k]);
+    try {
+      const { providers, usingFallback } = scanService.resolveProviders(
+        { use_firecrawl: 1, use_brave: 1, use_serper: 1 },
+        ownerId
+      );
+
+      expect(providers).toEqual(['direct']);
+      expect(usingFallback).toBe(true);
+    } finally {
+      original.forEach(([k, v]) => { process.env[k] = v; });
+    }
+  });
+
   it('always gives a website a detector engine', () => {
     // Search engines see the index, not the page. A Brave-only website had no
     // engine actually reading what it was monitoring.

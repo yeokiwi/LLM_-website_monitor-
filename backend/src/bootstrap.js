@@ -5,53 +5,33 @@
  * pre-existing data to, so it cannot run inside db/index.js alongside the
  * declarative schema. The steps are:
  *
- *   1. schema      — already done as a side effect of requiring ./db
- *   2. plans       — upsert the code-defined catalog
- *   3. superadmin  — seed the operator account from AUTH_USERNAME/AUTH_PASSWORD
- *   4. ownership   — rebuild `websites` per-tenant, assigning legacy rows to (3)
+ *   1. schema     — already done as a side effect of requiring ./db
+ *   2. account    — seed the single account that owns everything
+ *   3. ownership  — rebuild `websites` with an owner column, assigning legacy
+ *                   rows to (2)
  */
 
 const fs = require('fs');
-const crypto = require('crypto');
 
 const db = require('./db');
 const { dbPath, migrations } = require('./db');
-const planRepo = require('./repositories/planRepo');
-const userRepo = require('./repositories/userRepo');
 const accountService = require('./services/accountService');
 
 /**
- * The account that inherits data created before user accounts existed.
+ * The single account that owns every website, scan and schedule.
  *
- * Normally this is the superadmin seeded from AUTH_USERNAME/AUTH_PASSWORD. If
- * that is not configured but there is legacy data to rescue, an account is
- * created with a generated password, printed once so the operator can sign in.
+ * Sign-in does not consult it — credentials come from the environment — but the
+ * `owner_id` foreign keys do, so it has to exist before anything can be stored.
+ * It is named after AUTH_USERNAME; an account created under an earlier name is
+ * reused rather than orphaning the data it owns.
+ *
+ * Idempotent, and safe to call on any request.
  */
 function ensureSeedOwner() {
-  const superadmin = accountService.seedSuperadmin();
-  if (superadmin) return superadmin;
-
   const existing = db.prepare('SELECT * FROM users ORDER BY id ASC LIMIT 1').get();
   if (existing) return existing;
 
-  const password = crypto.randomBytes(12).toString('base64url');
-  const user = userRepo.create({
-    email: 'owner@localhost',
-    passwordHash: accountService.hashPassword(password),
-    name: 'Platform administrator',
-    role: 'superadmin',
-    emailVerifiedAt: new Date().toISOString(),
-  });
-
-  console.warn(
-    '\n⚠️  No AUTH_PASSWORD was set, but this database already contains data.\n' +
-      '   A platform administrator account has been created to own it:\n\n' +
-      '      email:    owner@localhost\n' +
-      `      password: ${password}\n\n` +
-      '   Sign in and change this password now — it will not be shown again.\n'
-  );
-
-  return user;
+  return accountService.seedSuperadmin();
 }
 
 /** Copy the database file aside before the one destructive migration. */
@@ -66,17 +46,16 @@ function backupDatabaseFile(label) {
 function bootstrap() {
   accountService.assertSecureConfig();
 
-  planRepo.seedPlans();
-
-  // Idempotent, and a no-op when AUTH_PASSWORD is unset.
-  accountService.seedSuperadmin();
+  // Unconditional: an instance with no AUTH_PASSWORD still needs somewhere to
+  // hang its data, and the account has to be there before the first request.
+  ensureSeedOwner();
 
   if (!migrations.hasRun(db, migrations.OWNERSHIP_MIGRATION)) {
     const legacyWebsites = db.prepare('SELECT COUNT(*) AS n FROM websites').get().n;
 
     if (legacyWebsites > 0) {
-      const backup = backupDatabaseFile('pre-multitenant');
-      console.log(`📦 Backed up the database to ${backup} before migrating to multi-tenant.`);
+      const backup = backupDatabaseFile('pre-owner-column');
+      console.log(`📦 Backed up the database to ${backup} before adding the owner column.`);
     }
 
     const owner = ensureSeedOwner();

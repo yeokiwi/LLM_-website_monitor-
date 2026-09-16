@@ -24,8 +24,6 @@ const crypto = require('crypto');
 
 const db = require('../db');
 const { dbPath, Database } = require('../db');
-const { requireSuperadmin } = require('../middleware/auth');
-const { requireFeature } = require('../middleware/entitlements');
 const websiteRepo = require('../repositories/websiteRepo');
 const scanRepo = require('../repositories/scanRepo');
 
@@ -55,7 +53,7 @@ function tableColumns(conn, table) {
 // ---------------------------------------------------------------------------
 // GET /api/database/my-data — the caller's own data, as JSON
 // ---------------------------------------------------------------------------
-router.get('/my-data', requireFeature('db_backup', 'Data export'), (req, res) => {
+router.get('/my-data', (req, res) => {
   const websites = websiteRepo.listForExport(req.user.userId);
   const { results: scans } = scanRepo.list(req.user.userId, 100_000, 0);
 
@@ -75,7 +73,7 @@ router.get('/my-data', requireFeature('db_backup', 'Data export'), (req, res) =>
 // ---------------------------------------------------------------------------
 // GET /api/database/export — the full multi-tenant database file
 // ---------------------------------------------------------------------------
-router.get('/export', requireSuperadmin, (req, res) => {
+router.get('/export', (req, res) => {
   const buffer = db.serialize();
   const filename = `monitor-backup-${new Date().toISOString().slice(0, 10)}.db`;
   res.setHeader('Content-Type', 'application/octet-stream');
@@ -90,7 +88,7 @@ router.get('/export', requireSuperadmin, (req, res) => {
 // an explicit `?confirm=replace-all-data` on top of the operator role. A
 // mis-click here is not recoverable from the app.
 // ---------------------------------------------------------------------------
-router.post('/import', requireSuperadmin, upload.single('file'), (req, res) => {
+router.post('/import', upload.single('file'), (req, res) => {
   if (req.query.confirm !== 'replace-all-data') {
     return res.status(400).json({
       error:

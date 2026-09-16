@@ -1,9 +1,9 @@
 /**
- * The multi-tenant migration.
+ * The ownership migration.
  *
  * This is the only destructive schema change in the codebase: SQLite cannot
  * drop the global `UNIQUE(url)` constraint, so `websites` is rebuilt and
- * copied. It runs once, against a real customer's data, and there is no undo
+ * copied. It runs once, against a real deployment's data, and there is no undo
  * beyond the file backup — so it is worth testing against a database shaped
  * like the one it will actually meet.
  */
@@ -111,7 +111,7 @@ function cleanupDatabase(dbPath) {
   }
 }
 
-describe('multi-tenant migration', () => {
+describe('ownership migration', () => {
   let dbPath;
   let app;
   let db;
@@ -159,8 +159,8 @@ describe('multi-tenant migration', () => {
     expect(active.n).toBe(6);
   });
 
-  it('assigns everything to the seeded operator', () => {
-    const owner = db.prepare("SELECT * FROM users WHERE role = 'superadmin'").get();
+  it('assigns everything to the seeded account', () => {
+    const owner = db.prepare('SELECT * FROM users ORDER BY id ASC LIMIT 1').get();
     expect(owner).toBeTruthy();
 
     const unowned = db
@@ -233,16 +233,16 @@ describe('multi-tenant migration', () => {
 
   it('is a no-op on a second run', () => {
     const { migrations } = require('../src/db');
-    const owner = db.prepare("SELECT id FROM users WHERE role = 'superadmin'").get();
+    const owner = db.prepare('SELECT id FROM users ORDER BY id ASC LIMIT 1').get();
 
     expect(migrations.backfillOwnership(db, owner.id)).toBe(false);
     expect(db.prepare('SELECT COUNT(*) AS n FROM websites').get().n).toBe(7);
   });
 
-  it('serves the inherited data to the owner over the API', async () => {
+  it('serves the inherited data over the API', async () => {
     const session = await request(app)
       .post('/api/auth/login')
-      .send({ email: 'admin@local', password: 'test-admin-password' });
+      .send({ username: 'admin', password: 'test-admin-password' });
 
     const websites = await as(request(app).get('/api/websites'), session.body.token);
     expect(websites.body).toHaveLength(6);
@@ -253,16 +253,6 @@ describe('multi-tenant migration', () => {
     expect(scans.body.results[0].llm_summary).toContain('Report for legacy site');
   });
 
-  it('now allows a second account to monitor a previously-unique URL', async () => {
-    const other = await request(app)
-      .post('/api/auth/signup')
-      .send({ email: 'newcomer@example.com', password: 'correct-horse-battery' });
-
-    const res = await as(request(app).post('/api/websites'), other.body.token)
-      .send({ url: 'https://legacy-1.example.com' });
-
-    expect(res.status).toBe(201);
-  });
 });
 
 describe('fresh database', () => {
@@ -293,7 +283,7 @@ describe('fresh database', () => {
     resetModules();
   });
 
-  it('starts already multi-tenant, with no rebuild needed', () => {
+  it('starts with the owner column already in place, with no rebuild needed', () => {
     const { sql } = db
       .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'websites'")
       .get();
@@ -314,14 +304,21 @@ describe('fresh database', () => {
     expect(backups).toHaveLength(0);
   });
 
-  it('seeds the plan catalog', () => {
-    const plans = db.prepare('SELECT slug FROM plans ORDER BY sort_order').all();
-    expect(plans.map((p) => p.slug)).toEqual(['free', 'pro', 'business']);
+  it('leaves the legacy billing tables empty', () => {
+    // They are still created so an existing database opens unchanged, but
+    // nothing writes to them any more.
+    for (const table of ['plans', 'subscriptions', 'usage_counters', 'payments']) {
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n).toBe(0);
+    }
   });
 
-  it('seeds the operator account', () => {
-    const admin = db.prepare("SELECT * FROM users WHERE role = 'superadmin'").get();
-    expect(admin.email).toBe('admin@local');
-    expect(admin.password_hash).not.toContain('test-admin-password');
+  it('seeds exactly one account, to own the data', () => {
+    const users = db.prepare('SELECT * FROM users').all();
+
+    expect(users).toHaveLength(1);
+    expect(users[0].email).toBe('admin@local');
+    // Sign-in compares against the environment; the stored hash is never the
+    // password in plaintext.
+    expect(users[0].password_hash).not.toContain('test-admin-password');
   });
 });

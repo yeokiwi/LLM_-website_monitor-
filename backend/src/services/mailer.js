@@ -6,8 +6,9 @@
  * provider-specific SDK.
  *
  * When SMTP is not configured the message is logged instead of sent. That keeps
- * local development and the existing self-hosted deployments working: a missing
- * mail server must never break signup or a scan.
+ * local development and the existing self-hosted deployments working — a
+ * missing mail server must never break a scan — and it is also how change
+ * alerts are turned off, since there is no per-account preference to set.
  */
 
 const nodemailer = require('nodemailer');

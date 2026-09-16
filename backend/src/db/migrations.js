@@ -183,7 +183,16 @@ function run(db) {
   `);
 
   // -------------------------------------------------------------------------
-  // Accounts and plan catalog
+  // Accounts
+  //
+  // `users` holds the single account that owns every website, scan and
+  // schedule; sign-in credentials come from the environment, not from here.
+  //
+  // `plans`, `subscriptions`, `usage_counters`, `payments` and `webhook_events`
+  // below are LEGACY and UNUSED. Subscription billing was removed, but dropping
+  // tables in SQLite is one-way, and an existing deployment gains nothing from
+  // it — so they are still created and simply never written to. Nothing outside
+  // that group references them.
   // -------------------------------------------------------------------------
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (

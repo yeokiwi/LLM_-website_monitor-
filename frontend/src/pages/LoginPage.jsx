@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { errorMessage } from '../api/client';
 import s from './LoginPage.module.css';
 
 export default function LoginPage() {
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -14,7 +14,7 @@ export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Return the user to wherever they were headed before the sign-in redirect.
+  // Where the auth guard sent us from, so a deep link survives signing in.
   const destination = location.state?.from?.pathname || '/';
 
   async function handleSubmit(e) {
@@ -23,7 +23,7 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      await login(email, password);
+      await login(username, password);
       navigate(destination, { replace: true });
     } catch (err) {
       setError(errorMessage(err, 'Sign in failed. Please try again.'));
@@ -41,15 +41,15 @@ export default function LoginPage() {
 
         <form className={s.form} onSubmit={handleSubmit}>
           <div className={s.field}>
-            <label className={s.label} htmlFor="email">Email</label>
+            <label className={s.label} htmlFor="username">Username</label>
             <input
-              id="email"
+              id="username"
               className={s.input}
-              type="email"
-              autoComplete="email"
+              type="text"
+              autoComplete="username"
               autoFocus
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
               required
             />
           </div>
@@ -73,13 +73,6 @@ export default function LoginPage() {
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
-
-        <p className={s.meta}>
-          <Link to="/forgot-password" className={s.link}>Forgot your password?</Link>
-        </p>
-        <p className={s.meta}>
-          New here? <Link to="/signup" className={s.link}>Create an account</Link>
-        </p>
       </div>
     </div>
   );

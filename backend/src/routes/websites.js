@@ -13,7 +13,6 @@ const XLSX = require('xlsx');
 const websiteRepo = require('../repositories/websiteRepo');
 const scanRepo = require('../repositories/scanRepo');
 const scheduleRepo = require('../repositories/scheduleRepo');
-const { requireWebsiteQuota, requireFeature } = require('../middleware/entitlements');
 
 const router = express.Router();
 
@@ -43,7 +42,7 @@ router.get('/', (req, res) => {
 // POST /api/websites — add a website
 // Body: { url, name?, domain?, srms_owner?, srms? }
 // ---------------------------------------------------------------------------
-router.post('/', requireWebsiteQuota(), (req, res) => {
+router.post('/', (req, res) => {
   const { url, name, domain, srms_owner, srms } = req.body;
 
   if (!url) {
@@ -70,7 +69,6 @@ router.post('/', requireWebsiteQuota(), (req, res) => {
 // ---------------------------------------------------------------------------
 router.post(
   '/bulk',
-  requireWebsiteQuota((req) => (Array.isArray(req.body.websites) ? req.body.websites.length : 1)),
   (req, res) => {
     const { websites } = req.body;
 
@@ -187,7 +185,7 @@ router.post('/bulk-update', (req, res) => {
 // Declared before `GET /:id` so the literal path is not captured by the
 // parameter route.
 // ---------------------------------------------------------------------------
-router.get('/export', requireFeature('excel_import_export', 'Spreadsheet export'), (req, res) => {
+router.get('/export', (req, res) => {
   const websites = websiteRepo.listForExport(req.user.userId);
 
   const rows = websites.map((w) => ({

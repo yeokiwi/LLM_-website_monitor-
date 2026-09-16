@@ -3,16 +3,16 @@
  *
  * Previously this lived inside routes/scans.js. It is a service now because the
  * scheduler runs exactly the same code path — a scheduled scan and a manual one
- * must consume the same quota, record the same usage, and produce the same
- * report, which only holds if there is one implementation.
+ * must record the same usage and produce the same report, which only holds if
+ * there is one implementation.
  *
  * This is the single place in the product where money is spent: every scraper
- * call and every LLM completion originates below. Usage metering therefore
- * lives here rather than in the route.
+ * call and every LLM completion originates below, and the per-scan token and
+ * duration figures recorded here are what make that spend visible.
  */
 
 const db = require('../db');
-const { scrapeWithProvider, scrapePdf, isPdfUrl } = require('./scraper');
+const { scrapeWithProvider, scrapePdf, isPdfUrl, availableEngines } = require('./scraper');
 const {
   saveSnapshot,
   snapshotText,
@@ -21,10 +21,7 @@ const {
 } = require('./snapshotService');
 const { computeDiff } = require('./diffService');
 const { summarizeChanges } = require('./llmService');
-const entitlements = require('./entitlements');
 const scanRepo = require('../repositories/scanRepo');
-const usageRepo = require('../repositories/usageRepo');
-const subscriptionRepo = require('../repositories/subscriptionRepo');
 
 const PROVIDER_SECTION_LABELS = {
   firecrawl: 'Firecrawl Results',
@@ -61,43 +58,28 @@ const PROVIDER_SHORT_LABELS = {
 };
 
 /**
- * Upstream requests each engine makes for one scrape. Brave and Serper each
- * issue three searches (web, news, announcements); Firecrawl one page fetch;
- * the direct scraper fetches the main page plus four guessed subpaths.
+ * Accumulates the LLM tokens one scan spent, so they can be written onto the
+ * scan row it produced. That row is the only cost record the product keeps.
  */
-const SCRAPE_CALLS_PER_PROVIDER = {
-  firecrawl: 1,
-  brave: 3,
-  serper: 3,
-  direct: 5,
-  pdf: 1,
-};
-
-/** Accumulates what one scan spent, so it can be metered in a single write. */
 function newCostLedger() {
-  return { llmCalls: 0, scrapeCalls: 0, inputTokens: 0, outputTokens: 0 };
+  return { inputTokens: 0, outputTokens: 0 };
 }
 
 function recordLlm(ledger, usage) {
-  ledger.llmCalls += 1;
   ledger.inputTokens += usage?.inputTokens || 0;
   ledger.outputTokens += usage?.outputTokens || 0;
 }
 
-function recordScrape(ledger, provider) {
-  ledger.scrapeCalls += SCRAPE_CALLS_PER_PROVIDER[provider] || 1;
-}
-
 /**
  * The engines to run for a website: the ones it opted into, intersected with
- * the ones the owner's plan permits and the deployment has keys for.
+ * the ones this deployment holds API keys for.
  *
- * A plan restriction silently downgrades rather than erroring — a Free user who
- * imported a spreadsheet with `use_firecrawl=1` gets a direct scrape, not a
- * failed scan and not a surprise Firecrawl bill.
+ * A missing key silently downgrades rather than erroring — a spreadsheet
+ * imported with `use_firecrawl=1` onto a deployment with no Firecrawl key gets
+ * a direct scrape, not a failed scan.
  */
 function resolveProviders(website, ownerId) {
-  const allowed = new Set(entitlements.allowedEngines(ownerId));
+  const allowed = new Set(availableEngines(['firecrawl', 'brave', 'serper']));
 
   const providers = [];
   if (website.use_firecrawl && allowed.has('firecrawl')) providers.push('firecrawl');
@@ -117,7 +99,6 @@ function resolveProviders(website, ownerId) {
 /** Scrape, snapshot, diff and summarise one website with one engine. */
 async function scanOneProvider(website, periodDays, provider, ledger) {
   const { contentText, pages, notes } = await scrapeWithProvider(provider, website.url, periodDays);
-  recordScrape(ledger, provider);
 
   const snap = saveSnapshot(website.id, contentText, provider);
   const baseline = findBaselineSnapshot(website.id, periodDays, provider, snap.id);
@@ -189,29 +170,14 @@ async function scanOneProvider(website, periodDays, provider, ledger) {
 }
 
 /**
- * Persist a scan result and charge the owner's usage counters in one
- * transaction, so a crash can never bill for a scan that was not recorded (or
- * record one that was not billed).
+ * Persist a scan result.
+ *
+ * Still a transaction, and still the one place a scan row is written, so the
+ * per-scan cost figures in `fields` (token counts, duration) land atomically
+ * with the result they describe.
  */
-function commitScan(ownerId, fields, ledger) {
-  const subscription = subscriptionRepo.findLiveForUser(ownerId);
-  const window = usageRepo.currentWindow(subscription);
-
-  const commit = db.transaction(() => {
-    const scanId = scanRepo.create(fields);
-
-    usageRepo.increment(ownerId, window, {
-      scans_used: 1,
-      llm_calls: ledger.llmCalls,
-      scrape_calls: ledger.scrapeCalls,
-      input_tokens: ledger.inputTokens,
-      output_tokens: ledger.outputTokens,
-    });
-
-    return scanId;
-  });
-
-  return commit();
+function commitScan(fields) {
+  return db.transaction(() => scanRepo.create(fields))();
 }
 
 /**
@@ -328,27 +294,23 @@ async function runSingleScan(website, periodDays, triggeredBy = 'manual') {
 
   const diffSummary = diffParts.length ? diffParts.join(' · ') : null;
 
-  const scanId = commitScan(
-    ownerId,
-    {
-      website_id: website.id,
-      owner_id: ownerId,
-      period_days: periodDays,
-      old_snapshot_id: primaryOldSnapshotId,
-      new_snapshot_id: primaryNewSnapshotId,
-      diff_summary: diffSummary,
-      llm_summary: combined,
-      status,
-      error_message: errorMessage,
-      triggered_by: triggeredBy,
-      engines_used: providers.join('+'),
-      engine_statuses: JSON.stringify(engineStatuses),
-      llm_input_tokens: ledger.inputTokens,
-      llm_output_tokens: ledger.outputTokens,
-      duration_ms: Date.now() - startedAt,
-    },
-    ledger
-  );
+  const scanId = commitScan({
+    website_id: website.id,
+    owner_id: ownerId,
+    period_days: periodDays,
+    old_snapshot_id: primaryOldSnapshotId,
+    new_snapshot_id: primaryNewSnapshotId,
+    diff_summary: diffSummary,
+    llm_summary: combined,
+    status,
+    error_message: errorMessage,
+    triggered_by: triggeredBy,
+    engines_used: providers.join('+'),
+    engine_statuses: JSON.stringify(engineStatuses),
+    llm_input_tokens: ledger.inputTokens,
+    llm_output_tokens: ledger.outputTokens,
+    duration_ms: Date.now() - startedAt,
+  });
 
   return {
     scanId,
@@ -384,7 +346,6 @@ async function runPdfScan(website, periodDays, triggeredBy, ledger, startedAt) {
 
   try {
     const { contentText, source, pages } = await scrapePdf(website.url);
-    recordScrape(ledger, 'pdf');
 
     newSnapshot = saveSnapshot(website.id, contentText, 'pdf');
 
@@ -403,19 +364,15 @@ async function runPdfScan(website, periodDays, triggeredBy, ledger, startedAt) {
       });
       recordLlm(ledger, usage);
 
-      const scanId = commitScan(
-        ownerId,
-        {
-          ...baseFields,
-          new_snapshot_id: newSnapshot.id,
-          status: 'no_history',
-          llm_summary: markdown,
-          llm_input_tokens: ledger.inputTokens,
-          llm_output_tokens: ledger.outputTokens,
-          duration_ms: Date.now() - startedAt,
-        },
-        ledger
-      );
+      const scanId = commitScan({
+        ...baseFields,
+        new_snapshot_id: newSnapshot.id,
+        status: 'no_history',
+        llm_summary: markdown,
+        llm_input_tokens: ledger.inputTokens,
+        llm_output_tokens: ledger.outputTokens,
+        duration_ms: Date.now() - startedAt,
+      });
 
       return {
         scanId,
@@ -436,18 +393,14 @@ async function runPdfScan(website, periodDays, triggeredBy, ledger, startedAt) {
 
     if (!hasChanges) {
       const summary = `No changes detected in the PDF at ${website.url} since the last scan.`;
-      const scanId = commitScan(
-        ownerId,
-        {
-          ...baseFields,
-          old_snapshot_id: oldSnapshot.id,
-          new_snapshot_id: newSnapshot.id,
-          status: 'no_changes',
-          llm_summary: summary,
-          duration_ms: Date.now() - startedAt,
-        },
-        ledger
-      );
+      const scanId = commitScan({
+        ...baseFields,
+        old_snapshot_id: oldSnapshot.id,
+        new_snapshot_id: newSnapshot.id,
+        status: 'no_changes',
+        llm_summary: summary,
+        duration_ms: Date.now() - startedAt,
+      });
 
       return {
         scanId,
@@ -475,21 +428,17 @@ async function runPdfScan(website, periodDays, triggeredBy, ledger, startedAt) {
 
     const diffSummary = `+${addedLines} lines / -${removedLines} lines`;
 
-    const scanId = commitScan(
-      ownerId,
-      {
-        ...baseFields,
-        old_snapshot_id: oldSnapshot.id,
-        new_snapshot_id: newSnapshot.id,
-        diff_summary: diffSummary,
-        llm_summary: markdown,
-        status: 'completed',
-        llm_input_tokens: ledger.inputTokens,
-        llm_output_tokens: ledger.outputTokens,
-        duration_ms: Date.now() - startedAt,
-      },
-      ledger
-    );
+    const scanId = commitScan({
+      ...baseFields,
+      old_snapshot_id: oldSnapshot.id,
+      new_snapshot_id: newSnapshot.id,
+      diff_summary: diffSummary,
+      llm_summary: markdown,
+      status: 'completed',
+      llm_input_tokens: ledger.inputTokens,
+      llm_output_tokens: ledger.outputTokens,
+      duration_ms: Date.now() - startedAt,
+    });
 
     return {
       scanId,
@@ -506,17 +455,13 @@ async function runPdfScan(website, periodDays, triggeredBy, ledger, startedAt) {
 
     let scanId = null;
     if (newSnapshot) {
-      scanId = commitScan(
-        ownerId,
-        {
-          ...baseFields,
-          new_snapshot_id: newSnapshot.id,
-          status: 'error',
-          error_message: err.message,
-          duration_ms: Date.now() - startedAt,
-        },
-        ledger
-      );
+      scanId = commitScan({
+        ...baseFields,
+        new_snapshot_id: newSnapshot.id,
+        status: 'error',
+        error_message: err.message,
+        duration_ms: Date.now() - startedAt,
+      });
     }
 
     return {
@@ -534,5 +479,4 @@ module.exports = {
   runSingleScan,
   resolveProviders,
   PROVIDER_ROLES,
-  SCRAPE_CALLS_PER_PROVIDER,
 };

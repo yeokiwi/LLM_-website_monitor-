@@ -2,7 +2,6 @@ const express = require('express');
 const multer = require('multer');
 const XLSX = require('xlsx');
 
-const { requireFeature } = require('../middleware/entitlements');
 
 const router = express.Router();
 
@@ -34,7 +33,6 @@ const upload = multer({
  */
 router.post(
   '/',
-  requireFeature('excel_import_export', 'Spreadsheet import'),
   upload.single('file'),
   (req, res) => {
     if (!req.file) {

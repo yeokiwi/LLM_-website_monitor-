@@ -12,7 +12,6 @@ const scanRepo = require('../repositories/scanRepo');
 const websiteRepo = require('../repositories/websiteRepo');
 const { buildReportsPdf } = require('../services/reportPdf');
 const { runSingleScan } = require('../services/scanService');
-const { requireFeature, requireScanQuota } = require('../middleware/entitlements');
 
 const router = express.Router();
 
@@ -32,7 +31,7 @@ function parseIdList(value) {
 // NOTE: must be declared before `GET /:id` so the literal path is not captured
 // by the `:id` parameter route.
 // ---------------------------------------------------------------------------
-router.get('/export-pdf', requireFeature('pdf_export', 'PDF export'), async (req, res) => {
+router.get('/export-pdf', async (req, res) => {
   const idsParam = (req.query.ids || '').trim();
   const ids = idsParam ? parseIdList(idsParam) : null;
 
@@ -100,15 +99,9 @@ router.patch('/:id', (req, res) => {
 // ---------------------------------------------------------------------------
 // POST /api/scans — trigger a scan
 // Body: { websiteIds: number[], periodDays: number }
-//
-// The whole batch is checked against the remaining scan allowance before any
-// work starts, so the request either runs in full or is rejected with a 402.
 // ---------------------------------------------------------------------------
 router.post(
   '/',
-  requireScanQuota((req) =>
-    Array.isArray(req.body.websiteIds) ? req.body.websiteIds.length : 1
-  ),
   async (req, res) => {
     const { websiteIds, periodDays } = req.body;
 
