@@ -6,6 +6,7 @@ import s from './ScanResultCard.module.css';
 
 const STATUS_LABELS = {
   completed:  { label: 'Changes Found',   cls: s.completed },
+  partial:    { label: 'Partial',          cls: s.partial },
   no_changes: { label: 'No Changes',       cls: s.noChanges },
   no_history: { label: 'Initial Report',   cls: s.noHistory },
   error:      { label: 'Error',            cls: s.error },
@@ -15,7 +16,9 @@ const STATUS_LABELS = {
 const PREVIEW_CHARS = 320;
 
 export default function ScanResultCard({ result }) {
-  const [expanded, setExpanded] = useState(result.status === 'completed');
+  const [expanded, setExpanded] = useState(
+    result.status === 'completed' || result.status === 'partial'
+  );
   const meta = STATUS_LABELS[result.status] || { label: result.status, cls: '' };
 
   // Support both snake_case (DB results) and camelCase (live scan results)
@@ -90,8 +93,18 @@ export default function ScanResultCard({ result }) {
 
       {expanded && (
         <div className={s.body}>
+          {/* One engine failed while another reported. The report below is real
+              but incomplete, so say which engine is missing from it. */}
+          {result.status === 'partial' && result.error_message && (
+            <div className={s.warningBox}>
+              <strong>Some engines failed:</strong> {result.error_message}
+            </div>
+          )}
+
           {/* Completed or first-scan with an LLM report */}
-          {(result.status === 'completed' || result.status === 'no_history') && hasReport && (
+          {(result.status === 'completed' ||
+            result.status === 'partial' ||
+            result.status === 'no_history') && hasReport && (
             <div className={s.summary}>
               <div className={s.summaryTitleRow}>
                 <h4 className={s.summaryTitle}>

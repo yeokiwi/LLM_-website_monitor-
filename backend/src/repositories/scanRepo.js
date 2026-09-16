@@ -94,11 +94,13 @@ function create(fields) {
       `INSERT INTO scan_results (
          website_id, owner_id, period_days, old_snapshot_id, new_snapshot_id,
          diff_summary, llm_summary, status, error_message,
-         triggered_by, engines_used, llm_input_tokens, llm_output_tokens, duration_ms
+         triggered_by, engines_used, engine_statuses,
+         llm_input_tokens, llm_output_tokens, duration_ms
        ) VALUES (
          @website_id, @owner_id, @period_days, @old_snapshot_id, @new_snapshot_id,
          @diff_summary, @llm_summary, @status, @error_message,
-         @triggered_by, @engines_used, @llm_input_tokens, @llm_output_tokens, @duration_ms
+         @triggered_by, @engines_used, @engine_statuses,
+         @llm_input_tokens, @llm_output_tokens, @duration_ms
        )`
     )
     .run({
@@ -108,6 +110,7 @@ function create(fields) {
       error_message: null,
       triggered_by: 'manual',
       engines_used: null,
+      engine_statuses: null,
       llm_input_tokens: null,
       llm_output_tokens: null,
       duration_ms: null,
@@ -121,8 +124,10 @@ function create(fields) {
  * Delete snapshot bodies and scan rows older than the plan's retention window.
  *
  * Snapshot text is the bulk of the database and previously grew without bound.
- * Only `content_text` is blanked on retained-but-old snapshots so the diff
- * chain's ids stay intact.
+ * Both the readable prefix and the compressed full body are blanked on
+ * retained-but-old snapshots so the diff chain's ids stay intact. `content_gz`
+ * must be cleared too — it is now the larger of the two, so blanking only
+ * `content_text` would stop retention reclaiming anything meaningful.
  */
 function pruneHistory(ownerId, retentionDays) {
   if (!retentionDays) return { scans: 0, snapshots: 0 };
@@ -139,8 +144,8 @@ function pruneHistory(ownerId, retentionDays) {
   const snapshots = db
     .prepare(
       `UPDATE snapshots
-          SET content_text = ''
-        WHERE content_text != ''
+          SET content_text = '', content_gz = NULL
+        WHERE (content_text != '' OR content_gz IS NOT NULL)
           AND scraped_at < datetime('now', ?)
           AND website_id IN (SELECT id FROM websites WHERE owner_id = ?)`
     )

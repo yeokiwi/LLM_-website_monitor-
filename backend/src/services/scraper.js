@@ -13,7 +13,15 @@
  *
  * The Brave and Serper paths are period-aware: they adjust search freshness so
  * recent content is surfaced first, and run a dedicated "announcements" search
- * to capture releases, changelog entries, and blog posts.
+ * to capture releases, changelog entries, and blog posts. They are scoped to the
+ * monitored *page* rather than its whole domain — a domain-wide `site:` query
+ * gives every URL on a shared host (21 Acts on sso.agc.gov.sg, say) the same
+ * results, so each one reports on whatever the host published most recently.
+ *
+ * Every scraper here either returns real content or throws a ScrapeError. It
+ * must never return a placeholder string: a placeholder gets snapshotted like
+ * any other body, so an outage produces a false "change" on the failing scan and
+ * another one on recovery, and it poisons the baseline in between.
  */
 
 const axios = require('axios');
@@ -24,11 +32,107 @@ const pdfParse = require('pdf-parse');
 const BRAVE_API_BASE = 'https://api.search.brave.com/res/v1';
 const SERPER_API_BASE = 'https://google.serper.dev';
 const FIRECRAWL_API_BASE = process.env.FIRECRAWL_BASE_URL || 'https://api.firecrawl.dev/v1';
-const MAX_CONTENT_CHARS = 14000; // slightly larger to give LLM more context
+// Safety cap only. Content is no longer truncated for monitoring purposes —
+// hashing a 14k prefix meant the later sections of a long Act or PDF were never
+// watched. This bound exists purely so a pathological document cannot exhaust
+// memory, and when it trips it says so rather than cutting off silently.
+const MAX_CONTENT_CHARS = 2_000_000;
 const MAX_PDF_BYTES = 25 * 1024 * 1024; // 25 MB cap to avoid huge downloads
 
 // Subpaths tried when falling back to direct cheerio scraping
 const SUBPATHS_TO_TRY = ['/blog', '/news', '/changelog', '/releases', '/announcements', '/updates', '/whats-new'];
+
+/**
+ * A scrape that could not produce trustworthy content.
+ *
+ * Callers record the engine as `error` and write no snapshot, which keeps the
+ * baseline clean across an outage instead of diffing against a failure message.
+ */
+class ScrapeError extends Error {
+  constructor(message, options = {}) {
+    super(message);
+    this.name = 'ScrapeError';
+    this.provider = options.provider;
+    if (options.cause) this.cause = options.cause;
+  }
+}
+
+/** Human-readable cause for an upstream failure, including HTTP status. */
+function describeError(err) {
+  if (!err) return 'unknown error';
+  const status = err.response?.status;
+  if (!status) return err.message || String(err);
+
+  const payload = err.response?.data;
+  const detail =
+    (typeof payload === 'string' && payload) ||
+    payload?.message ||
+    payload?.error?.message ||
+    payload?.error ||
+    '';
+  const text = typeof detail === 'string' ? detail : JSON.stringify(detail);
+  return text ? `HTTP ${status} — ${String(text).slice(0, 200)}` : `HTTP ${status}`;
+}
+
+/** Apply the memory-safety cap, making any cut explicit in the content itself. */
+function capContent(text) {
+  if (text.length <= MAX_CONTENT_CHARS) return text;
+  return `${text.slice(0, MAX_CONTENT_CHARS)}\n\n[content truncated at ${MAX_CONTENT_CHARS} characters]`;
+}
+
+/**
+ * Normalise a publication date to `YYYY-MM-DD`, or return '' when the provider
+ * gave a relative age.
+ *
+ * Brave (`r.age`) and Serper (`r.date`) routinely return strings like
+ * "3 days ago". Those shift on every call for an unchanged page, so hashing them
+ * makes nearly every scan look like a change. Relative ages are dropped from the
+ * hashed body and kept only on the `pages` objects, which are not hashed and are
+ * still shown to the LLM — the recency signal survives, the false diffs do not.
+ */
+function absoluteDate(raw) {
+  if (!raw) return '';
+  const text = String(raw).trim();
+  if (!text) return '';
+  if (/(\bago\b|^just now$|^yesterday$|^today$|^\d+\s*[smhdwy]$)/i.test(text)) return '';
+
+  const parsed = Date.parse(text);
+  if (Number.isNaN(parsed)) return '';
+  return new Date(parsed).toISOString().slice(0, 10);
+}
+
+/**
+ * Build the search queries for a monitored URL.
+ *
+ * A URL with a path is monitored as a page: results are restricted to that path
+ * so two Acts on the same host no longer receive identical results. A bare
+ * domain is still monitored as a domain, which is what the user asked for.
+ */
+function searchQueries(url, domain) {
+  let path = '';
+  try {
+    path = new URL(url).pathname.replace(/\/+$/, '');
+  } catch {
+    /* not a parseable URL — fall through to domain scope */
+  }
+
+  if (!path) {
+    return {
+      scope: `site:${domain}`,
+      primary: `site:${domain}`,
+      news: domain,
+      announcements: `site:${domain} (blog OR changelog OR "release notes" OR announcement OR "what's new" OR news OR updates)`,
+    };
+  }
+
+  const bare = url.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  return {
+    scope: `site:${domain} inurl:${path}`,
+    primary: `site:${domain} inurl:${path}`,
+    news: `"${bare}"`,
+    announcements: `site:${domain} inurl:${path} (update OR amendment OR revision OR changelog OR "release notes" OR announcement)`,
+  };
+}
 
 /**
  * Scrape a website and return structured content.
@@ -207,7 +311,7 @@ async function scrapePdf(url) {
     ].join('\n');
   }
 
-  const contentText = (headerLines.join('\n') + '\n' + body).slice(0, MAX_CONTENT_CHARS);
+  const contentText = capContent(headerLines.join('\n') + '\n' + body);
 
   const pages = [{
     type: 'pdf',
@@ -228,7 +332,7 @@ async function scrapePdf(url) {
  * Maps a monitoring period to a Brave freshness filter.
  *   pw = past week | pm = past month | py = past year
  */
-function braveFresnhess(periodDays) {
+function braveFreshness(periodDays) {
   if (periodDays <= 7) return 'pw';
   if (periodDays <= 31) return 'pm';
   return 'py';
@@ -236,76 +340,75 @@ function braveFresnhess(periodDays) {
 
 async function scrapeWithBrave(url, periodDays) {
   const domain = extractDomain(url);
-  const freshness = braveFresnhess(periodDays);
+  const freshness = braveFreshness(periodDays);
+  const queries = searchQueries(url, domain);
 
   // Three parallel searches:
-  //  1. Indexed pages on the domain (main content snapshot)
-  //  2. News coverage mentioning the domain
-  //  3. Announcement / changelog / release pages within the domain
+  //  1. Indexed pages at the monitored path (main content snapshot)
+  //  2. News coverage mentioning the page or domain
+  //  3. Announcement / changelog / release pages at that path
   const [webResults, newsResults, announcementResults] = await Promise.allSettled([
-    braveFetch('/web/search', {
-      q: `site:${domain}`,
-      count: 20,
-      freshness,
-    }),
-    braveFetch('/news/search', {
-      q: domain,
-      count: 10,
-      freshness,
-    }),
-    braveFetch('/web/search', {
-      q: `site:${domain} (blog OR changelog OR "release notes" OR announcement OR "what's new" OR news OR updates)`,
-      count: 10,
-      freshness,
-    }),
+    braveFetch('/web/search', { q: queries.primary, count: 20, freshness }),
+    braveFetch('/news/search', { q: queries.news, count: 10, freshness }),
+    braveFetch('/web/search', { q: queries.announcements, count: 10, freshness }),
   ]);
 
-  const pages = [];
-
-  if (webResults.status === 'fulfilled') {
-    const results = webResults.value?.web?.results || [];
-    results.forEach((r) => {
-      pages.push({
-        type: 'web',
-        title: r.title || '',
-        url: r.url || '',
-        description: r.description || '',
-        published: r.page_age || r.age || '',
-      });
+  // The primary search is the snapshot. If it failed — an exhausted quota, a
+  // rate limit, a network blip — we do not know what is indexed, and pretending
+  // we saw nothing would diff as "every page removed".
+  if (webResults.status === 'rejected') {
+    throw new ScrapeError(`Brave web search failed for ${url}: ${describeError(webResults.reason)}`, {
+      provider: 'brave',
+      cause: webResults.reason,
     });
   }
 
+  const pages = [];
+  const notes = [];
+
+  collectPages(pages, webResults.value?.web?.results, (r) => ({
+    type: 'web',
+    title: r.title || '',
+    url: r.url || '',
+    description: r.description || '',
+    published: r.page_age || r.age || '',
+    publishedDate: absoluteDate(r.page_age || r.age),
+  }));
+
   if (newsResults.status === 'fulfilled') {
-    const results = newsResults.value?.results || [];
-    results.forEach((r) => {
-      pages.push({
-        type: 'news',
-        title: r.title || '',
-        url: r.url || '',
-        description: r.description || '',
-        published: r.age || r.meta_url?.path || '',
-      });
-    });
+    // `meta_url.path` was previously used as a date fallback; it is a URL path,
+    // not a date, so it is gone.
+    collectPages(pages, newsResults.value?.results, (r) => ({
+      type: 'news',
+      title: r.title || '',
+      url: r.url || '',
+      description: r.description || '',
+      published: r.age || '',
+      publishedDate: absoluteDate(r.age),
+    }));
+  } else {
+    notes.push(`Brave news search unavailable: ${describeError(newsResults.reason)}`);
   }
 
   if (announcementResults.status === 'fulfilled') {
-    const results = announcementResults.value?.web?.results || [];
-    results.forEach((r) => {
-      // Only add if not already present (avoid duplicates)
-      if (!pages.some((p) => p.url === r.url)) {
-        pages.push({
-          type: 'announcement',
-          title: r.title || '',
-          url: r.url || '',
-          description: r.description || '',
-          published: r.page_age || r.age || '',
-        });
-      }
-    });
+    collectPages(pages, announcementResults.value?.web?.results, (r) => ({
+      type: 'announcement',
+      title: r.title || '',
+      url: r.url || '',
+      description: r.description || '',
+      published: r.page_age || r.age || '',
+      publishedDate: absoluteDate(r.page_age || r.age),
+    }));
+  } else {
+    notes.push(`Brave announcement search unavailable: ${describeError(announcementResults.reason)}`);
   }
 
-  const contentText = formatSearchContent(url, domain, pages);
-  return { contentText: contentText.slice(0, MAX_CONTENT_CHARS), source: 'brave', pages };
+  return {
+    contentText: capContent(canonicalSearchContent(url, queries.scope, pages)),
+    source: 'brave',
+    pages,
+    notes,
+  };
 }
 
 async function braveFetch(endpoint, params) {
@@ -322,22 +425,48 @@ async function braveFetch(endpoint, params) {
 }
 
 /**
- * Format an indexed-page list (from Brave or Serper) into LLM-ready text.
- * Provider-agnostic — both search backends produce the same `pages` shape.
+ * Append mapped results to `pages`, skipping URLs already present.
+ *
+ * Deduplication used to apply only to the announcement pass, so a page indexed
+ * as both web and news appeared twice and its ordering drove a spurious diff.
  */
-function formatSearchContent(url, domain, pages) {
-  if (pages.length === 0) {
-    return `No indexed content found for ${url}`;
+function collectPages(pages, results, map) {
+  for (const r of results || []) {
+    const page = map(r);
+    if (!page.url) continue;
+    if (pages.some((p) => p.url === page.url)) continue;
+    pages.push(page);
   }
-  const lines = [`Website: ${url}`, `Domain: ${domain}`, `Indexed pages (${pages.length}):`, ''];
-  pages.forEach((p, i) => {
-    lines.push(`[${i + 1}] ${p.type.toUpperCase()} | ${p.title}`);
-    lines.push(`    URL: ${p.url}`);
-    if (p.published) lines.push(`    Published: ${p.published}`);
-    if (p.description) lines.push(`    Excerpt: ${p.description}`);
-    lines.push('');
-  });
-  return lines.join('\n');
+}
+
+/**
+ * Format an indexed-page list (from Brave or Serper) into the body that gets
+ * hashed and diffed.
+ *
+ * One line per result, sorted by URL, no ordinals and no relative ages. The old
+ * format numbered results `[1]`, `[2]`… in raw API order, so a reshuffle of
+ * unchanged results rewrote the entire body. Sorting by URL also turns the
+ * line diff into a genuine set comparison for free: an added line is a page
+ * that appeared, a removed line is a page that dropped out of the index.
+ */
+function canonicalSearchContent(url, scope, pages) {
+  const rows = pages
+    .map((p) => ({
+      url: p.url || '',
+      title: (p.title || '').replace(/\s+/g, ' ').trim(),
+      date: p.publishedDate || '',
+    }))
+    .sort((a, b) => a.url.localeCompare(b.url) || a.title.localeCompare(b.title))
+    .map((r) => [r.url, r.title, r.date].filter(Boolean).join(' | '));
+
+  return [
+    `Website: ${url}`,
+    `Query scope: ${scope}`,
+    `Results (${rows.length}):`,
+    '',
+    ...rows,
+    '',
+  ].join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -357,75 +486,67 @@ function serperTbs(periodDays) {
 async function scrapeWithSerper(url, periodDays) {
   const domain = extractDomain(url);
   const tbs = serperTbs(periodDays);
+  const queries = searchQueries(url, domain);
 
-  // Three parallel searches mirroring the Brave strategy:
-  //  1. Indexed pages on the domain (main content snapshot)
-  //  2. News coverage mentioning the domain
-  //  3. Announcement / changelog / release pages within the domain
+  // Three parallel searches mirroring the Brave strategy, scoped to the
+  // monitored path rather than the whole domain.
   const [webResults, newsResults, announcementResults] = await Promise.allSettled([
-    serperFetch('/search', {
-      q: `site:${domain}`,
-      num: 20,
-      tbs,
-    }),
-    serperFetch('/news', {
-      q: domain,
-      num: 10,
-      tbs,
-    }),
-    serperFetch('/search', {
-      q: `site:${domain} (blog OR changelog OR "release notes" OR announcement OR "what's new" OR news OR updates)`,
-      num: 10,
-      tbs,
-    }),
+    serperFetch('/search', { q: queries.primary, num: 20, tbs }),
+    serperFetch('/news', { q: queries.news, num: 10, tbs }),
+    serperFetch('/search', { q: queries.announcements, num: 10, tbs }),
   ]);
 
-  const pages = [];
-
-  if (webResults.status === 'fulfilled') {
-    const results = webResults.value?.organic || [];
-    results.forEach((r) => {
-      pages.push({
-        type: 'web',
-        title: r.title || '',
-        url: r.link || '',
-        description: r.snippet || '',
-        published: r.date || '',
-      });
+  if (webResults.status === 'rejected') {
+    throw new ScrapeError(`Serper web search failed for ${url}: ${describeError(webResults.reason)}`, {
+      provider: 'serper',
+      cause: webResults.reason,
     });
   }
 
+  const pages = [];
+  const notes = [];
+
+  collectPages(pages, webResults.value?.organic, (r) => ({
+    type: 'web',
+    title: r.title || '',
+    url: r.link || '',
+    description: r.snippet || '',
+    published: r.date || '',
+    publishedDate: absoluteDate(r.date),
+  }));
+
   if (newsResults.status === 'fulfilled') {
-    const results = newsResults.value?.news || [];
-    results.forEach((r) => {
-      pages.push({
-        type: 'news',
-        title: r.title || '',
-        url: r.link || '',
-        description: r.snippet || '',
-        published: r.date || '',
-      });
-    });
+    collectPages(pages, newsResults.value?.news, (r) => ({
+      type: 'news',
+      title: r.title || '',
+      url: r.link || '',
+      description: r.snippet || '',
+      published: r.date || '',
+      publishedDate: absoluteDate(r.date),
+    }));
+  } else {
+    notes.push(`Serper news search unavailable: ${describeError(newsResults.reason)}`);
   }
 
   if (announcementResults.status === 'fulfilled') {
-    const results = announcementResults.value?.organic || [];
-    results.forEach((r) => {
-      // Only add if not already present (avoid duplicates)
-      if (!pages.some((p) => p.url === r.link)) {
-        pages.push({
-          type: 'announcement',
-          title: r.title || '',
-          url: r.link || '',
-          description: r.snippet || '',
-          published: r.date || '',
-        });
-      }
-    });
+    collectPages(pages, announcementResults.value?.organic, (r) => ({
+      type: 'announcement',
+      title: r.title || '',
+      url: r.link || '',
+      description: r.snippet || '',
+      published: r.date || '',
+      publishedDate: absoluteDate(r.date),
+    }));
+  } else {
+    notes.push(`Serper announcement search unavailable: ${describeError(announcementResults.reason)}`);
   }
 
-  const contentText = formatSearchContent(url, domain, pages);
-  return { contentText: contentText.slice(0, MAX_CONTENT_CHARS), source: 'serper', pages };
+  return {
+    contentText: capContent(canonicalSearchContent(url, queries.scope, pages)),
+    source: 'serper',
+    pages,
+    notes,
+  };
 }
 
 async function serperFetch(endpoint, body) {
@@ -470,11 +591,9 @@ async function scrapeWithFirecrawl(url) {
   const description = meta.description || '';
 
   if (!md) {
-    return {
-      contentText: `No content returned by Firecrawl for ${url}`,
-      source: 'firecrawl',
-      pages: [],
-    };
+    // Previously snapshotted as "No content returned by Firecrawl for …", which
+    // then diffed against the real page on the next successful scan.
+    throw new ScrapeError(`Firecrawl returned no content for ${url}`, { provider: 'firecrawl' });
   }
 
   const header = [
@@ -485,7 +604,7 @@ async function scrapeWithFirecrawl(url) {
     '',
   ].filter((l) => l !== null).join('\n');
 
-  const contentText = (header + '\n' + md).slice(0, MAX_CONTENT_CHARS);
+  const contentText = capContent(header + '\n' + md);
 
   const pages = [{
     type: 'page',
@@ -494,7 +613,7 @@ async function scrapeWithFirecrawl(url) {
     description,
   }];
 
-  return { contentText, source: 'firecrawl', pages };
+  return { contentText, source: 'firecrawl', pages, notes: [] };
 }
 
 // ---------------------------------------------------------------------------
@@ -502,27 +621,46 @@ async function scrapeWithFirecrawl(url) {
 // ---------------------------------------------------------------------------
 
 async function scrapeWithCheerio(url) {
-  // Fetch the main page and try to discover update/blog subpages
-  const [mainPage, ...subPages] = await Promise.allSettled([
-    fetchPage(url),
-    ...SUBPATHS_TO_TRY.slice(0, 4).map((path) => fetchPage(buildSubpageUrl(url, path))),
-  ]);
-
-  const pages = [];
-
-  if (mainPage.status === 'fulfilled' && mainPage.value) {
-    pages.push({ type: 'page', ...mainPage.value });
+  // The monitored page itself is fetched outside the settled batch: if it does
+  // not load we have nothing to compare, and a placeholder body would diff
+  // against the real page on recovery.
+  let mainPage;
+  try {
+    mainPage = await fetchPage(url);
+  } catch (err) {
+    throw new ScrapeError(`Failed to fetch content from ${url}: ${describeError(err)}`, {
+      provider: 'direct',
+      cause: err,
+    });
+  }
+  if (!mainPage || mainPage.absent) {
+    throw new ScrapeError(
+      `Failed to fetch content from ${url}${mainPage?.reason ? `: ${mainPage.reason}` : ''}`,
+      { provider: 'direct' }
+    );
   }
 
-  for (const sp of subPages) {
-    if (sp.status === 'fulfilled' && sp.value) {
-      pages.push({ type: 'subpage', ...sp.value });
+  const subpaths = SUBPATHS_TO_TRY.slice(0, 4);
+  const subPages = await Promise.allSettled(
+    subpaths.map((path) => fetchPage(buildSubpageUrl(url, path)))
+  );
+
+  const pages = [{ type: 'page', ...mainPage }];
+  const notes = [];
+
+  subPages.forEach((sp, i) => {
+    if (sp.status === 'rejected') {
+      // A 5xx or a network error means we do not know whether the subpage still
+      // has content. Dropping it would read as a large deletion in the diff, so
+      // the whole scrape fails instead and the baseline is left alone.
+      throw new ScrapeError(
+        `Failed to fetch ${buildSubpageUrl(url, subpaths[i])}: ${describeError(sp.reason)}`,
+        { provider: 'direct', cause: sp.reason }
+      );
     }
-  }
-
-  if (pages.length === 0) {
-    return { contentText: `Failed to fetch content from ${url}`, source: 'direct', pages: [] };
-  }
+    if (sp.value.absent) return; // definitive 4xx — the subpage simply is not there
+    pages.push({ type: 'subpage', ...sp.value });
+  });
 
   const contentText = pages
     .map((p) => {
@@ -534,19 +672,25 @@ async function scrapeWithCheerio(url) {
     .join('\n\n---\n\n');
 
   return {
-    contentText: contentText.slice(0, MAX_CONTENT_CHARS),
+    contentText: capContent(contentText),
     source: 'direct',
     pages: pages.map(({ bodyText: _b, ...rest }) => rest), // strip raw body from page list
+    notes,
   };
 }
 
 /**
  * Fetch a single URL and extract clean text.
- * Returns null if the page does not load successfully.
+ *
+ * Resolves to `{ absent: true }` for a definitive 4xx (the page is not there)
+ * and throws for anything indeterminate — a 5xx, a timeout, a connection reset.
+ * It used to swallow every error and return null, which made "the page is gone"
+ * and "we could not reach it" indistinguishable.
  */
 async function fetchPage(url) {
+  let response;
   try {
-    const response = await axios.get(url, {
+    response = await axios.get(url, {
       timeout: 12000,
       headers: {
         'User-Agent':
@@ -554,39 +698,46 @@ async function fetchPage(url) {
       },
       maxRedirects: 5,
     });
-
-    if (!response.data || typeof response.data !== 'string') return null;
-
-    const $ = cheerio.load(response.data);
-
-    // Remove noise
-    $('script, style, noscript, svg, iframe, nav, footer, [role="banner"], .cookie-banner, #cookie-consent').remove();
-
-    const title = $('title').text().trim();
-    const metaDesc = $('meta[name="description"]').attr('content') || '';
-
-    // Extract main content area
-    const contentSelectors = ['main', 'article', '[role="main"]', '#content', '.content', '#main', '.main', 'body'];
-    let contentEl = null;
-    for (const sel of contentSelectors) {
-      if ($(sel).length) {
-        contentEl = $(sel).first();
-        break;
-      }
+  } catch (err) {
+    const status = err.response?.status;
+    if (status && status >= 400 && status < 500) {
+      return { absent: true, reason: describeError(err) };
     }
-
-    const rawText = (contentEl || $('body')).text();
-    const bodyText = rawText
-      .replace(/\t/g, ' ')
-      .replace(/[ ]{3,}/g, '  ')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim()
-      .slice(0, 5000);
-
-    return { url, title, description: metaDesc, bodyText };
-  } catch {
-    return null;
+    throw err;
   }
+
+  if (!response.data || typeof response.data !== 'string') {
+    return { absent: true, reason: 'response was not HTML' };
+  }
+
+  const $ = cheerio.load(response.data);
+
+  // Remove noise
+  $('script, style, noscript, svg, iframe, nav, footer, [role="banner"], .cookie-banner, #cookie-consent').remove();
+
+  const title = $('title').text().trim();
+  const metaDesc = $('meta[name="description"]').attr('content') || '';
+
+  // Extract main content area
+  const contentSelectors = ['main', 'article', '[role="main"]', '#content', '.content', '#main', '.main', 'body'];
+  let contentEl = null;
+  for (const sel of contentSelectors) {
+    if ($(sel).length) {
+      contentEl = $(sel).first();
+      break;
+    }
+  }
+
+  // No per-page slice: the whole body is kept so changes further down the page
+  // are monitored rather than silently dropped.
+  const rawText = (contentEl || $('body')).text();
+  const bodyText = rawText
+    .replace(/\t/g, ' ')
+    .replace(/[ ]{3,}/g, '  ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return { url, title, description: metaDesc, bodyText };
 }
 
 function buildSubpageUrl(baseUrl, path) {
@@ -610,4 +761,12 @@ function extractDomain(url) {
   }
 }
 
-module.exports = { scrapeWebsite, scrapeWithProvider, scrapePdf, isPdfUrl, extractDomain, resolveScraperProvider };
+module.exports = {
+  scrapeWebsite,
+  scrapeWithProvider,
+  scrapePdf,
+  isPdfUrl,
+  extractDomain,
+  resolveScraperProvider,
+  ScrapeError,
+};

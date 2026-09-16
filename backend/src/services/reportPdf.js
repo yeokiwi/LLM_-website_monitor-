@@ -24,6 +24,7 @@ const COLORS = {
 
 const STATUS_LABELS = {
   completed: 'Changes Found',
+  partial: 'Changes Found (partial)',
   no_changes: 'No Changes',
   no_history: 'Initial Report',
   error: 'Error',
@@ -183,6 +184,16 @@ function renderScanSection(doc, scan) {
 
   // Body
   if (scan.llm_summary) {
+    // A partial scan has a real report, but one engine failed. Say so above it
+    // rather than leaving the failure buried in the markdown.
+    if (scan.status === 'partial' && scan.error_message) {
+      doc
+        .font('Helvetica-Oblique')
+        .fontSize(10)
+        .fillColor(COLORS.muted)
+        .text(`Some engines failed on this scan: ${scan.error_message}`);
+      doc.moveDown(0.6);
+    }
     renderMarkdown(doc, scan.llm_summary);
   } else if (scan.status === 'no_changes') {
     doc

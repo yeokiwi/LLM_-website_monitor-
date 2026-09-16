@@ -78,7 +78,9 @@ async function runSchedule(row) {
 
   const result = await runSingleScan(website, row.period_days, 'schedule');
 
-  if (result.status === 'completed') {
+  // `partial` also means changes were found — one engine just did not report.
+  // Keying the alert off the status alone would drop those notifications.
+  if (result.changesFound) {
     await notifyChangeDetected(ownerId, website, result);
   }
 

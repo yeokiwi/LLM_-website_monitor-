@@ -154,6 +154,9 @@ function run(db) {
   addColumn(db, 'scan_results', 'llm_input_tokens', 'INTEGER');
   addColumn(db, 'scan_results', 'llm_output_tokens', 'INTEGER');
   addColumn(db, 'scan_results', 'duration_ms', 'INTEGER');
+  // Per-engine outcome map (JSON), so a row marked 'partial' says which engine
+  // failed without the answer being buried in the report markdown.
+  addColumn(db, 'scan_results', 'engine_statuses', 'TEXT');
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_scan_results_owner
       ON scan_results(owner_id, scanned_at);
@@ -161,6 +164,19 @@ function run(db) {
 
   // Provider-scoped snapshots so each engine diffs against its own history.
   addColumn(db, 'snapshots', 'provider', "TEXT DEFAULT 'default'");
+
+  // Full-content snapshots. `content_text` keeps a readable prefix (the column
+  // is NOT NULL and the UI reads it), while `content_gz` holds the complete
+  // gzipped body that hashing and diffing actually use, so changes past the old
+  // 14k truncation point are no longer invisible.
+  //
+  // `format_version` marks how the body was built. Snapshots written before this
+  // migration are truncated and carry unnormalised search text, so diffing one
+  // against a current snapshot would report the whole page as changed; the
+  // baseline lookup requires the current version and re-baselines instead.
+  addColumn(db, 'snapshots', 'content_gz', 'BLOB');
+  addColumn(db, 'snapshots', 'content_chars', 'INTEGER');
+  addColumn(db, 'snapshots', 'format_version', 'INTEGER DEFAULT 1');
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_snapshots_website_provider_scraped
       ON snapshots(website_id, provider, scraped_at);

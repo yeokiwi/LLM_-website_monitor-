@@ -97,6 +97,7 @@ const MD_COMPONENTS = {
 
 const STATUS_META = {
   completed:  { label: 'Changes Found',  cls: 'completed' },
+  partial:    { label: 'Partial',        cls: 'partial' },
   no_history: { label: 'Initial Report', cls: 'noHistory' },
   no_changes: { label: 'No Changes',     cls: 'noChanges' },
   error:      { label: 'Error',          cls: 'error' },
@@ -238,6 +239,12 @@ export default function ReportPage() {
 
         {/* Report body */}
         <div className={s.reportBody}>
+          {scan.status === 'partial' && scan.error_message && (
+            <div className={s.warningBox}>
+              <strong>Some engines failed on this scan</strong>
+              <p>{scan.error_message}</p>
+            </div>
+          )}
           {hasMarkdown ? (
             <div className={s.markdown}>
               <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>

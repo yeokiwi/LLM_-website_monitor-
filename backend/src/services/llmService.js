@@ -82,6 +82,29 @@ const DEFAULT_OPENAI_MODEL = 'gpt-4o';
 // Maximum tokens for structured reports
 const MAX_TOKENS = 4096;
 
+/**
+ * Diff budget for a single report call — roughly 7,500 tokens, so an ordinary
+ * scan still costs exactly one call while seeing four times the diff the old
+ * 6,000-character prompt cut allowed. Only a genuinely large diff pays for the
+ * extra condensing passes below.
+ */
+const DIFF_CHARS_PER_CALL = 30000;
+
+/** Upper bound on condensing passes, so one huge diff cannot run up the bill. */
+const MAX_DIFF_CHUNKS = 4;
+
+/** Characters of baseline/current content shown alongside the diff. */
+const EXCERPT_CHARS = 6000;
+
+const CHUNK_SYSTEM_PROMPT = `You are extracting facts from part of a website content diff. \
+Lines beginning with "+" were added, lines beginning with "-" were removed.
+
+List only what this fragment shows, as short markdown bullets: new or removed pages, \
+announcements, releases, product or pricing changes, and policy or terms changes. \
+Include any dates that appear. Do not write an introduction, a conclusion, or headings. \
+Do not speculate about anything outside the fragment. If the fragment shows nothing of \
+substance, reply with exactly: (nothing of substance in this fragment)`;
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -111,23 +134,92 @@ async function summarizeChanges({
   diffText,
   pages,
   isFirstScan = false,
+  diffTruncated = false,
+  omittedLines = 0,
 }) {
   const provider = (process.env.LLM_PROVIDER || 'claude').toLowerCase();
+  const call = provider === 'claude' ? callClaude : callOpenAICompatible;
+
+  let diffForPrompt = diffText || '';
+  let condensed = false;
+  const usages = [];
+
+  // A diff too large for one call is condensed in chunks rather than cut off.
+  if (diffForPrompt.length > DIFF_CHARS_PER_CALL) {
+    const chunks = splitDiff(diffForPrompt, DIFF_CHARS_PER_CALL, MAX_DIFF_CHUNKS);
+    const extracts = [];
+
+    for (let i = 0; i < chunks.length; i += 1) {
+      const result = await call(
+        `Diff fragment ${i + 1} of ${chunks.length}:\n\n${chunks[i]}`,
+        CHUNK_SYSTEM_PROMPT
+      );
+      usages.push(result.usage);
+      const text = result.markdown.trim();
+      if (text && !/^\(nothing of substance/i.test(text)) {
+        extracts.push(`--- from diff part ${i + 1} of ${chunks.length} ---\n${text}`);
+      }
+    }
+
+    diffForPrompt = extracts.join('\n\n');
+    condensed = true;
+  }
+
   const userMessage = buildAnalysisMessage({
     websiteUrl,
     websiteName,
     periodDays,
     oldContent,
     newContent,
-    diffText,
+    diffText: diffForPrompt,
     pages,
     isFirstScan,
+    diffTruncated,
+    omittedLines,
+    condensed,
   });
 
-  if (provider === 'claude') {
-    return callClaude(userMessage);
+  const final = await call(userMessage, SYSTEM_PROMPT);
+  usages.push(final.usage);
+
+  return { markdown: final.markdown, usage: mergeUsage(usages) };
+}
+
+/**
+ * Split a diff into at most `maxChunks` pieces on line boundaries.
+ * Whatever does not fit is dropped, but the caller still declares the
+ * truncation in the prompt — it is never passed off as a complete diff.
+ */
+function splitDiff(diffText, chunkChars, maxChunks) {
+  const chunks = [];
+  let current = [];
+  let used = 0;
+
+  for (const line of diffText.split('\n')) {
+    if (used + line.length + 1 > chunkChars && current.length) {
+      chunks.push(current.join('\n'));
+      if (chunks.length === maxChunks) return chunks;
+      current = [];
+      used = 0;
+    }
+    current.push(line);
+    used += line.length + 1;
   }
-  return callOpenAICompatible(userMessage);
+
+  if (current.length) chunks.push(current.join('\n'));
+  return chunks;
+}
+
+/** Sum the token usage of every call made for one report. */
+function mergeUsage(usages) {
+  return usages.reduce(
+    (acc, u) => ({
+      inputTokens: acc.inputTokens + (u?.inputTokens || 0),
+      outputTokens: acc.outputTokens + (u?.outputTokens || 0),
+      model: u?.model || acc.model,
+    }),
+    { inputTokens: 0, outputTokens: 0, model: '' }
+  );
 }
 
 /** Milliseconds before an LLM call is abandoned. */
@@ -142,7 +234,7 @@ const EMPTY_ANALYSIS = '## Executive Summary\n\nNo analysis generated.';
 // Claude (Anthropic)
 // ---------------------------------------------------------------------------
 
-async function callClaude(userMessage) {
+async function callClaude(userMessage, systemPrompt = SYSTEM_PROMPT) {
   const Anthropic = require('@anthropic-ai/sdk');
   const client = new Anthropic({
     apiKey: process.env.ANTHROPIC_API_KEY,
@@ -153,7 +245,7 @@ async function callClaude(userMessage) {
   const message = await client.messages.create({
     model,
     max_tokens: MAX_TOKENS,
-    system: SYSTEM_PROMPT,
+    system: systemPrompt,
     messages: [{ role: 'user', content: userMessage }],
   });
 
@@ -171,7 +263,7 @@ async function callClaude(userMessage) {
 // OpenAI-compatible (OpenAI, Ollama, LM Studio, Groq, Together, Mistral, …)
 // ---------------------------------------------------------------------------
 
-async function callOpenAICompatible(userMessage) {
+async function callOpenAICompatible(userMessage, systemPrompt = SYSTEM_PROMPT) {
   const OpenAI = require('openai');
 
   const clientOptions = {
@@ -190,7 +282,7 @@ async function callOpenAICompatible(userMessage) {
     model,
     max_tokens: MAX_TOKENS,
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: userMessage },
     ],
   });
@@ -218,6 +310,9 @@ function buildAnalysisMessage({
   diffText,
   pages,
   isFirstScan,
+  diffTruncated = false,
+  omittedLines = 0,
+  condensed = false,
 }) {
   const today = new Date().toISOString().split('T')[0];
   const periodStart = new Date(Date.now() - periodDays * 86_400_000).toISOString().split('T')[0];
@@ -245,22 +340,36 @@ function buildAnalysisMessage({
   }
 
   // ── Content diff (when available) ──
-  if (diffText && (diffText.includes('+') || diffText.includes('-'))) {
-    parts.push(`=== CONTENT DIFF (lines added/removed since baseline) ===`);
-    parts.push(diffText.slice(0, 6000));
+  //
+  // Passed through whole. It used to be re-cut to 6,000 characters here, on top
+  // of the cap diffService had already applied, with nothing telling the model
+  // that it was looking at a partial account of the changes.
+  if (diffText) {
+    parts.push(
+      condensed
+        ? `=== CONTENT DIFF (condensed: the diff was too large for one pass, so each part was summarised first) ===`
+        : `=== CONTENT DIFF (lines added/removed since baseline) ===`
+    );
+    parts.push(diffText);
+    if (diffTruncated) {
+      parts.push(
+        `NOTE: this diff is incomplete — ${omittedLines} further changed line${omittedLines === 1 ? '' : 's'} ` +
+          `could not be included. Say in the Executive Summary that some changes could not be reviewed.`
+      );
+    }
     parts.push('');
   }
 
   // ── Baseline content (comparison anchor) ──
   if (oldContent && !isFirstScan) {
-    parts.push(`=== BASELINE CONTENT (from ~${periodDays} day${periodDays === 1 ? '' : 's'} ago, first 2500 chars) ===`);
-    parts.push(oldContent.slice(0, 2500));
+    parts.push(`=== BASELINE CONTENT (from ~${periodDays} day${periodDays === 1 ? '' : 's'} ago, first ${EXCERPT_CHARS} chars) ===`);
+    parts.push(oldContent.slice(0, EXCERPT_CHARS));
     parts.push('');
   }
 
   // ── Current content ──
-  parts.push(`=== CURRENT CONTENT (first 2500 chars) ===`);
-  parts.push(newContent.slice(0, 2500));
+  parts.push(`=== CURRENT CONTENT (first ${EXCERPT_CHARS} chars) ===`);
+  parts.push(newContent.slice(0, EXCERPT_CHARS));
   parts.push('');
 
   parts.push(

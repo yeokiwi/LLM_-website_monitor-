@@ -94,7 +94,13 @@ Add websites  →  Choose period  →  Trigger scan
 
 **First scan:** A baseline snapshot is recorded. No comparison is possible yet — the app reports "First scan recorded" and waits for the next run.
 
-**Subsequent scans:** The app finds the oldest snapshot within the chosen period, diffs it against today's content, and sends both versions plus the diff to the LLM. If the content hash is identical, the LLM call is skipped and "No changes detected" is returned.
+**Subsequent scans:** The app takes the most recent snapshot at or before the start of the chosen period as its baseline, falling back to the oldest snapshot inside the period when there is nothing older. It diffs that against today's content and sends both versions plus the diff to the LLM. If the content hash is identical, the LLM call is skipped and "No changes detected" is returned.
+
+Snapshots store the **full** page or document content, gzip-compressed, and the content hash covers all of it — a change in the later sections of a long Act or PDF is detected like any other.
+
+**Detector engines vs. supplementary engines.** Firecrawl, the direct scraper and the PDF reader are *detectors*: they read the monitored page itself and decide whether it changed. Brave and Serper are *supplementary*: they query a search index, so their results appear in the report as related news and announcements but never set the scan's verdict on their own. A website configured with search engines only is given the direct scraper as well, so something is always reading the page. Search queries are scoped to the monitored URL's path (`inurl:`), so two pages on the same host do not receive identical results.
+
+**Failures are failures, not content.** A scrape that cannot produce trustworthy content — an exhausted search quota, an empty Firecrawl response, an unreachable page — records that engine as an error and writes no snapshot. Nothing is stored that would diff against the real page once the site recovers.
 
 ---
 
@@ -757,9 +763,16 @@ The file must have a header row. Column names are case-insensitive.
 | Status | Meaning |
 |---|---|
 | **Changes Found** | Differences detected between the old and new snapshots; LLM summary is shown. |
+| **Partial** | At least one engine failed while another produced a report. The report is real but incomplete; the failing engine and its error are recorded on the scan. |
 | **No Changes** | Content hash is identical to the baseline snapshot; no LLM call was made. |
-| **First Scan** | No historical snapshot existed in the chosen period; a baseline has now been stored. Run the scan again later to see changes. |
+| **First Scan** | No usable historical snapshot existed for this engine; a baseline has now been stored. Run the scan again later to see changes. |
 | **Error** | The website could not be fetched, or the LLM call failed. The error message is displayed. |
+
+Per-engine outcomes are stored as JSON on `scan_results.engine_statuses`, so a **Partial** scan says which engine failed without that being buried in the report text.
+
+### After upgrading
+
+Snapshots taken before this version were truncated at 14,000 characters and stored search results in an unnormalised form, so they cannot be compared against current ones without reporting the whole page as changed. They are not used as baselines. Each website reports **First Scan** once after the upgrade and then resumes normal comparison.
 
 ---
 

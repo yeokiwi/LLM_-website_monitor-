@@ -15,6 +15,7 @@ const db = require('../db');
 const { scrapeWithProvider, scrapePdf, isPdfUrl } = require('./scraper');
 const {
   saveSnapshot,
+  snapshotText,
   findBaselineSnapshot,
   getPreviousSnapshot,
 } = require('./snapshotService');
@@ -27,10 +28,30 @@ const subscriptionRepo = require('../repositories/subscriptionRepo');
 
 const PROVIDER_SECTION_LABELS = {
   firecrawl: 'Firecrawl Results',
-  brave: 'Brave Search Results',
-  serper: 'Serper Search Results',
+  brave: 'Related News & Announcements (Brave — supplementary)',
+  serper: 'Related News & Announcements (Serper — supplementary)',
   direct: 'Direct Scrape Results',
 };
+
+/**
+ * What each engine is for.
+ *
+ * `detector` engines read the monitored page itself and decide whether it
+ * changed. `supplementary` engines are search APIs: they surface related news
+ * and announcements, but they see the search index rather than the page, so
+ * their results are context, not a verdict. Their outcome is reported but never
+ * sets the row status — otherwise a reshuffled result list reads as a change to
+ * the page, and every URL on a shared host reports the same thing.
+ */
+const PROVIDER_ROLES = {
+  firecrawl: 'detector',
+  direct: 'detector',
+  pdf: 'detector',
+  brave: 'supplementary',
+  serper: 'supplementary',
+};
+
+const isDetector = (provider) => PROVIDER_ROLES[provider] === 'detector';
 
 const PROVIDER_SHORT_LABELS = {
   firecrawl: 'Firecrawl',
@@ -84,19 +105,28 @@ function resolveProviders(website, ownerId) {
   if (website.use_serper && allowed.has('serper')) providers.push('serper');
 
   if (providers.length === 0) return { providers: ['direct'], usingFallback: true };
+
+  // A website configured with search engines only has nothing actually reading
+  // the page, so add the direct scraper as its change detector. Without this a
+  // Brave-only site would have its verdict decided by domain-wide search hits.
+  if (!providers.some(isDetector)) providers.unshift('direct');
+
   return { providers, usingFallback: false };
 }
 
 /** Scrape, snapshot, diff and summarise one website with one engine. */
 async function scanOneProvider(website, periodDays, provider, ledger) {
-  const { contentText, pages } = await scrapeWithProvider(provider, website.url, periodDays);
+  const { contentText, pages, notes } = await scrapeWithProvider(provider, website.url, periodDays);
   recordScrape(ledger, provider);
 
   const snap = saveSnapshot(website.id, contentText, provider);
-  const baseline = findBaselineSnapshot(website.id, periodDays, provider);
+  const baseline = findBaselineSnapshot(website.id, periodDays, provider, snap.id);
+  const footnotes = (notes || []).length ? `\n\n_${notes.join('. ')}._` : '';
 
-  // First scan for this engine — no history yet.
-  if (!baseline || baseline.id === snap.id) {
+  // No eligible history for this engine: either a genuinely first scan, or the
+  // only earlier snapshots predate the current content format (see
+  // snapshotService.FORMAT_VERSION) and would diff as wholesale change.
+  if (!baseline) {
     const { markdown, usage } = await summarizeChanges({
       websiteUrl: website.url,
       websiteName: website.name,
@@ -111,15 +141,16 @@ async function scanOneProvider(website, periodDays, provider, ledger) {
 
     return {
       status: 'no_history',
-      markdown,
+      markdown: markdown + footnotes,
       newSnapshotId: snap.id,
       oldSnapshotId: null,
       diffSummary: null,
     };
   }
 
-  const { diffText, hasChanges, addedLines, removedLines } = computeDiff(
-    baseline.content_text,
+  const baselineText = snapshotText(baseline);
+  const { diffText, hasChanges, addedLines, removedLines, truncated, omittedLines } = computeDiff(
+    baselineText,
     contentText
   );
 
@@ -127,7 +158,7 @@ async function scanOneProvider(website, periodDays, provider, ledger) {
   if (!hasChanges) {
     return {
       status: 'no_changes',
-      markdown: `No changes detected over the past ${periodDays} day(s).`,
+      markdown: `No changes detected over the past ${periodDays} day(s).${footnotes}`,
       newSnapshotId: snap.id,
       oldSnapshotId: baseline.id,
       diffSummary: null,
@@ -138,17 +169,19 @@ async function scanOneProvider(website, periodDays, provider, ledger) {
     websiteUrl: website.url,
     websiteName: website.name,
     periodDays,
-    oldContent: baseline.content_text,
+    oldContent: baselineText,
     newContent: contentText,
     diffText,
     pages,
     isFirstScan: false,
+    diffTruncated: truncated,
+    omittedLines,
   });
   recordLlm(ledger, usage);
 
   return {
     status: 'completed',
-    markdown,
+    markdown: markdown + footnotes,
     newSnapshotId: snap.id,
     oldSnapshotId: baseline.id,
     diffSummary: `+${addedLines}/-${removedLines}`,
@@ -208,10 +241,12 @@ async function runSingleScan(website, periodDays, triggeredBy = 'manual') {
   const { providers, usingFallback } = resolveProviders(website, ownerId);
 
   const sections = [];
-  const statuses = [];
+  const engineStatuses = {};
+  const engineErrors = [];
   const diffParts = [];
   let primaryNewSnapshotId = null;
   let primaryOldSnapshotId = null;
+  let primaryIsDetector = false;
   let lastError = null;
 
   for (const provider of providers) {
@@ -221,29 +256,57 @@ async function runSingleScan(website, periodDays, triggeredBy = 'manual') {
       const r = await scanOneProvider(website, periodDays, provider, ledger);
       body = r.markdown;
       status = r.status;
-      if (primaryNewSnapshotId === null) {
+
+      // Prefer a detector's snapshots as the row's diff anchor — those are the
+      // ones that read the monitored page.
+      const detector = isDetector(provider);
+      if (primaryNewSnapshotId === null || (detector && !primaryIsDetector)) {
         primaryNewSnapshotId = r.newSnapshotId;
         primaryOldSnapshotId = r.oldSnapshotId;
+        primaryIsDetector = detector;
       }
       if (r.diffSummary) diffParts.push(`${PROVIDER_SHORT_LABELS[provider]}: ${r.diffSummary}`);
     } catch (err) {
       console.error(`Scan failed for ${website.url} [${provider}]:`, err.message);
       body = `**Error:** ${err.message}`;
       status = 'error';
+      engineErrors.push(`${PROVIDER_SHORT_LABELS[provider]}: ${err.message}`);
       lastError = err;
     }
-    statuses.push(status);
+    engineStatuses[provider] = status;
     sections.push(usingFallback ? body : `# ${PROVIDER_SECTION_LABELS[provider]}\n\n${body}`);
   }
 
   const combined = sections.join('\n\n');
 
   // Aggregate the per-engine outcomes into one row-level status.
+  //
+  // The verdict — changed, unchanged, no history — comes only from detector
+  // engines: a search engine sees the index, not the page, so a reshuffled
+  // result list must not read as a change to the monitored page. When every
+  // detector failed but a search engine succeeded, the search results are all
+  // we have, so they decide rather than reporting nothing at all.
+  const detectors = providers.filter(isDetector);
+  const voting = detectors.some((pr) => engineStatuses[pr] !== 'error') ? detectors : providers;
+  const votes = voting.map((pr) => engineStatuses[pr]);
+  const succeeded = votes.filter((st) => st !== 'error');
+  const changesFound = succeeded.includes('completed');
+
+  // Whether any engine failed is a separate question from the verdict, and it
+  // is the one the status used to swallow: Firecrawl finding changes while
+  // Brave errored was recorded as a clean `completed`.
+  const anyEngineFailed = providers.some((pr) => engineStatuses[pr] === 'error');
+
   let status;
-  if (statuses.includes('completed')) status = 'completed';
-  else if (statuses.includes('no_history')) status = 'no_history';
-  else if (statuses.every((st) => st === 'no_changes')) status = 'no_changes';
-  else status = 'error';
+  if (succeeded.length === 0) status = 'error';
+  else if (anyEngineFailed) status = 'partial';
+  else if (changesFound) status = 'completed';
+  else if (succeeded.includes('no_history')) status = 'no_history';
+  else status = 'no_changes';
+
+  // A supplementary engine failing never changes the verdict, but it is still
+  // recorded so it is visible outside the report prose.
+  const errorMessage = engineErrors.length ? engineErrors.join(' · ') : null;
 
   // Every engine failed before saving a snapshot, so there is no snapshot to
   // reference and no row to write (new_snapshot_id is NOT NULL). Usage is not
@@ -254,7 +317,12 @@ async function runSingleScan(website, periodDays, triggeredBy = 'manual') {
       websiteId: website.id,
       url: website.url,
       status: 'error',
+      changesFound: false,
       error: lastError ? lastError.message : 'Scan failed',
+      // Same key the stored row uses, so a live result and a fetched one render
+      // identically in the UI.
+      error_message: errorMessage,
+      engine_statuses: engineStatuses,
     };
   }
 
@@ -271,8 +339,10 @@ async function runSingleScan(website, periodDays, triggeredBy = 'manual') {
       diff_summary: diffSummary,
       llm_summary: combined,
       status,
+      error_message: errorMessage,
       triggered_by: triggeredBy,
       engines_used: providers.join('+'),
+      engine_statuses: JSON.stringify(engineStatuses),
       llm_input_tokens: ledger.inputTokens,
       llm_output_tokens: ledger.outputTokens,
       duration_ms: Date.now() - startedAt,
@@ -285,8 +355,12 @@ async function runSingleScan(website, periodDays, triggeredBy = 'manual') {
     websiteId: website.id,
     url: website.url,
     status,
+    changesFound,
     llm_summary: combined,
     diff_summary: diffSummary,
+    error: errorMessage,
+    error_message: errorMessage,
+    engine_statuses: engineStatuses,
     source: providers.join('+'),
   };
 }
@@ -348,13 +422,15 @@ async function runPdfScan(website, periodDays, triggeredBy, ledger, startedAt) {
         websiteId: website.id,
         url: website.url,
         status: 'no_history',
+        changesFound: false,
         llm_summary: markdown,
         source,
       };
     }
 
-    const { diffText, hasChanges, addedLines, removedLines } = computeDiff(
-      oldSnapshot.content_text,
+    const oldText = snapshotText(oldSnapshot);
+    const { diffText, hasChanges, addedLines, removedLines, truncated, omittedLines } = computeDiff(
+      oldText,
       contentText
     );
 
@@ -378,6 +454,7 @@ async function runPdfScan(website, periodDays, triggeredBy, ledger, startedAt) {
         websiteId: website.id,
         url: website.url,
         status: 'no_changes',
+        changesFound: false,
         source,
       };
     }
@@ -386,11 +463,13 @@ async function runPdfScan(website, periodDays, triggeredBy, ledger, startedAt) {
       websiteUrl: website.url,
       websiteName: website.name,
       periodDays,
-      oldContent: oldSnapshot.content_text,
+      oldContent: oldText,
       newContent: contentText,
       diffText,
       pages,
       isFirstScan: false,
+      diffTruncated: truncated,
+      omittedLines,
     });
     recordLlm(ledger, usage);
 
@@ -417,6 +496,7 @@ async function runPdfScan(website, periodDays, triggeredBy, ledger, startedAt) {
       websiteId: website.id,
       url: website.url,
       status: 'completed',
+      changesFound: true,
       llm_summary: markdown,
       diff_summary: diffSummary,
       source,
@@ -444,6 +524,7 @@ async function runPdfScan(website, periodDays, triggeredBy, ledger, startedAt) {
       websiteId: website.id,
       url: website.url,
       status: 'error',
+      changesFound: false,
       error: err.message,
     };
   }
@@ -452,5 +533,6 @@ async function runPdfScan(website, periodDays, triggeredBy, ledger, startedAt) {
 module.exports = {
   runSingleScan,
   resolveProviders,
+  PROVIDER_ROLES,
   SCRAPE_CALLS_PER_PROVIDER,
 };
