@@ -102,36 +102,133 @@ function absoluteDate(raw) {
 }
 
 /**
- * Build the search queries for a monitored URL.
+ * The search queries for a monitored URL, most precise first.
  *
  * A URL with a path is monitored as a page: results are restricted to that path
  * so two Acts on the same host no longer receive identical results. A bare
- * domain is still monitored as a domain, which is what the user asked for.
+ * domain is still monitored as a domain.
+ *
+ * There is more than one shape because search APIs restrict which operators an
+ * account may use, and they do not publish the list. Free Serper accounts
+ * reject `inurl:` outright — "Query pattern not allowed for free accounts" —
+ * which used to fail the whole engine. `site:<host><path>` scopes to the same
+ * page with a single, widely supported operator, so `inurl:` buys nothing; the
+ * plainer shapes below it exist so a still-more-restricted account degrades
+ * instead of failing.
+ *
+ * @returns {Array<{ scope: string, primary: string, news: string, announcements: string }>}
  */
-function searchQueries(url, domain) {
+function queryVariants(url, domain) {
+  let host = domain;
   let path = '';
   try {
-    path = new URL(url).pathname.replace(/\/+$/, '');
+    const parsed = new URL(url);
+    // The URL's real host, not the www-stripped `domain`: `site:` matches on a
+    // host+path prefix, so the two halves have to come from the same place.
+    host = parsed.hostname;
+    path = parsed.pathname.replace(/\/+$/, '');
   } catch {
     /* not a parseable URL — fall through to domain scope */
   }
 
+  const domainWide = {
+    scope: `site:${domain}`,
+    primary: `site:${domain}`,
+    news: domain,
+    announcements: `site:${domain} (blog OR changelog OR "release notes" OR announcement OR "what's new" OR news OR updates)`,
+  };
+
   if (!path) {
-    return {
-      scope: `site:${domain}`,
-      primary: `site:${domain}`,
-      news: domain,
-      announcements: `site:${domain} (blog OR changelog OR "release notes" OR announcement OR "what's new" OR news OR updates)`,
-    };
+    return [
+      domainWide,
+      // No operators at all, for an account that rejects even `site:`.
+      { scope: domain, primary: domain, news: domain, announcements: `${domain} news updates` },
+    ];
   }
 
-  const bare = url.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
-  return {
-    scope: `site:${domain} inurl:${path}`,
-    primary: `site:${domain} inurl:${path}`,
-    news: `"${bare}"`,
-    announcements: `site:${domain} inurl:${path} (update OR amendment OR revision OR changelog OR "release notes" OR announcement)`,
-  };
+  const bare = `${host}${path}`;
+
+  return [
+    // Page-scoped with one operator.
+    {
+      scope: `site:${bare}`,
+      primary: `site:${bare}`,
+      news: `"${bare}"`,
+      announcements: `site:${bare} (update OR amendment OR revision OR changelog OR "release notes" OR announcement)`,
+    },
+    // No operators at all, for an account that rejects even `site:`.
+    {
+      scope: `"${bare}"`,
+      primary: `"${bare}"`,
+      news: `"${bare}"`,
+      announcements: `"${bare}" update`,
+    },
+    // Last resort: domain-wide. Loses page scoping, but returns something
+    // rather than failing the engine.
+    domainWide,
+  ];
+}
+
+/**
+ * Does this failure mean the provider refused the shape of the query?
+ *
+ * Search APIs answer a rejected query with 400 and an exhausted quota or a bad
+ * key with 401/403, so a 400 is a reliable "this query is unacceptable" and a
+ * safe trigger for retrying a simpler one. Retrying the *same* query would be
+ * pointless: the rejection is deterministic.
+ */
+function isQueryRejection(err) {
+  return err?.response?.status === 400;
+}
+
+/**
+ * Which query variant each provider's account was last seen to accept.
+ *
+ * The restriction belongs to the API key, not to any one website, so a single
+ * discovery serves every scan for the life of the process. Without this, a
+ * restricted account would burn a rejected call on every scan forever.
+ */
+const acceptedVariant = new Map();
+
+/**
+ * Run a provider's searches, stepping down to a plainer query shape whenever it
+ * rejects the current one.
+ *
+ * `run(variant)` performs all of that provider's searches and must reject with
+ * the *primary* search's error when the primary fails — the primary is the
+ * snapshot, so its failure is the engine's failure. Once every variant has been
+ * refused the last error is rethrown, which keeps a dead key or an exhausted
+ * quota visible as an error rather than quietly becoming "nothing indexed".
+ */
+async function withQueryFallback(provider, url, domain, run) {
+  const variants = queryVariants(url, domain);
+  const start = Math.min(acceptedVariant.get(provider) ?? 0, variants.length - 1);
+
+  let lastError;
+  for (let i = start; i < variants.length; i += 1) {
+    try {
+      const result = await run(variants[i]);
+      acceptedVariant.set(provider, i);
+      return result;
+    } catch (err) {
+      lastError = err;
+      if (!isQueryRejection(err)) throw err;
+    }
+  }
+
+  // Every shape refused. Say that, rather than surfacing the bare
+  // "Request failed with status code 400" — which query was rejected is the
+  // only thing that makes this actionable.
+  throw new ScrapeError(
+    `${provider} refused every query form for ${url} ` +
+      `(tried ${variants.length - start}): ${describeError(lastError)}`,
+    { provider, cause: lastError }
+  );
+}
+
+/** Test seam: forget which query shapes providers were seen to accept. */
+function resetQueryVariantCache() {
+  acceptedVariant.clear();
 }
 
 /**
@@ -365,74 +462,78 @@ function braveFreshness(periodDays) {
 async function scrapeWithBrave(url, periodDays) {
   const domain = extractDomain(url);
   const freshness = braveFreshness(periodDays);
-  const queries = searchQueries(url, domain);
 
-  // Three parallel searches:
-  //  1. Indexed pages at the monitored path (main content snapshot)
-  //  2. News coverage mentioning the page or domain
-  //  3. Announcement / changelog / release pages at that path
-  const [webResults, newsResults, announcementResults] = await Promise.allSettled([
-    braveFetch('/web/search', { q: queries.primary, count: 20, freshness }),
-    braveFetch('/news/search', { q: queries.news, count: 10, freshness }),
-    braveFetch('/web/search', { q: queries.announcements, count: 10, freshness }),
-  ]);
+  return withQueryFallback('brave', url, domain, async (queries) => {
+    // Three parallel searches:
+    //  1. Indexed pages at the monitored path (main content snapshot)
+    //  2. News coverage mentioning the page or domain
+    //  3. Announcement / changelog / release pages at that path
+    const [webResults, newsResults, announcementResults] = await Promise.allSettled([
+      braveFetch('/web/search', { q: queries.primary, count: 20, freshness }),
+      braveFetch('/news/search', { q: queries.news, count: 10, freshness }),
+      braveFetch('/web/search', { q: queries.announcements, count: 10, freshness }),
+    ]);
 
-  // The primary search is the snapshot. If it failed — an exhausted quota, a
-  // rate limit, a network blip — we do not know what is indexed, and pretending
-  // we saw nothing would diff as "every page removed".
-  if (webResults.status === 'rejected') {
-    throw new ScrapeError(`Brave web search failed for ${url}: ${describeError(webResults.reason)}`, {
-      provider: 'brave',
-      cause: webResults.reason,
-    });
-  }
+    // The primary search is the snapshot. If it failed — an exhausted quota, a
+    // rate limit, a network blip — we do not know what is indexed, and
+    // pretending we saw nothing would diff as "every page removed". Rejecting
+    // with the raw error lets withQueryFallback see a 400 and try a plainer
+    // query before giving up.
+    if (webResults.status === 'rejected') {
+      if (isQueryRejection(webResults.reason)) throw webResults.reason;
+      throw new ScrapeError(
+        `Brave web search failed for ${url}: ${describeError(webResults.reason)}`,
+        { provider: 'brave', cause: webResults.reason }
+      );
+    }
 
-  const pages = [];
-  const notes = [];
+    const pages = [];
+    const notes = [`Brave query: ${queries.scope}`];
 
-  collectPages(pages, webResults.value?.web?.results, (r) => ({
-    type: 'web',
-    title: r.title || '',
-    url: r.url || '',
-    description: r.description || '',
-    published: r.page_age || r.age || '',
-    publishedDate: absoluteDate(r.page_age || r.age),
-  }));
-
-  if (newsResults.status === 'fulfilled') {
-    // `meta_url.path` was previously used as a date fallback; it is a URL path,
-    // not a date, so it is gone.
-    collectPages(pages, newsResults.value?.results, (r) => ({
-      type: 'news',
-      title: r.title || '',
-      url: r.url || '',
-      description: r.description || '',
-      published: r.age || '',
-      publishedDate: absoluteDate(r.age),
-    }));
-  } else {
-    notes.push(`Brave news search unavailable: ${describeError(newsResults.reason)}`);
-  }
-
-  if (announcementResults.status === 'fulfilled') {
-    collectPages(pages, announcementResults.value?.web?.results, (r) => ({
-      type: 'announcement',
+    collectPages(pages, webResults.value?.web?.results, (r) => ({
+      type: 'web',
       title: r.title || '',
       url: r.url || '',
       description: r.description || '',
       published: r.page_age || r.age || '',
       publishedDate: absoluteDate(r.page_age || r.age),
     }));
-  } else {
-    notes.push(`Brave announcement search unavailable: ${describeError(announcementResults.reason)}`);
-  }
 
-  return {
-    contentText: capContent(canonicalSearchContent(url, queries.scope, pages)),
-    source: 'brave',
-    pages,
-    notes,
-  };
+    if (newsResults.status === 'fulfilled') {
+      // `meta_url.path` was previously used as a date fallback; it is a URL path,
+      // not a date, so it is gone.
+      collectPages(pages, newsResults.value?.results, (r) => ({
+        type: 'news',
+        title: r.title || '',
+        url: r.url || '',
+        description: r.description || '',
+        published: r.age || '',
+        publishedDate: absoluteDate(r.age),
+      }));
+    } else {
+      notes.push(`Brave news search unavailable: ${describeError(newsResults.reason)}`);
+    }
+
+    if (announcementResults.status === 'fulfilled') {
+      collectPages(pages, announcementResults.value?.web?.results, (r) => ({
+        type: 'announcement',
+        title: r.title || '',
+        url: r.url || '',
+        description: r.description || '',
+        published: r.page_age || r.age || '',
+        publishedDate: absoluteDate(r.page_age || r.age),
+      }));
+    } else {
+      notes.push(`Brave announcement search unavailable: ${describeError(announcementResults.reason)}`);
+    }
+
+    return {
+      contentText: capContent(canonicalSearchContent(url, pages)),
+      source: 'brave',
+      pages,
+      notes,
+    };
+  });
 }
 
 async function braveFetch(endpoint, params) {
@@ -472,8 +573,13 @@ function collectPages(pages, results, map) {
  * unchanged results rewrote the entire body. Sorting by URL also turns the
  * line diff into a genuine set comparison for free: an added line is a page
  * that appeared, a removed line is a page that dropped out of the index.
+ *
+ * The query itself is deliberately NOT in here. It describes how we looked, not
+ * what the page says, so including it meant that changing our own query
+ * strategy registered as a change to the monitored site. It goes in `notes`,
+ * which reaches the report without reaching the hash.
  */
-function canonicalSearchContent(url, scope, pages) {
+function canonicalSearchContent(url, pages) {
   const rows = pages
     .map((p) => ({
       url: p.url || '',
@@ -485,7 +591,6 @@ function canonicalSearchContent(url, scope, pages) {
 
   return [
     `Website: ${url}`,
-    `Query scope: ${scope}`,
     `Results (${rows.length}):`,
     '',
     ...rows,
@@ -510,67 +615,72 @@ function serperTbs(periodDays) {
 async function scrapeWithSerper(url, periodDays) {
   const domain = extractDomain(url);
   const tbs = serperTbs(periodDays);
-  const queries = searchQueries(url, domain);
 
-  // Three parallel searches mirroring the Brave strategy, scoped to the
-  // monitored path rather than the whole domain.
-  const [webResults, newsResults, announcementResults] = await Promise.allSettled([
-    serperFetch('/search', { q: queries.primary, num: 20, tbs }),
-    serperFetch('/news', { q: queries.news, num: 10, tbs }),
-    serperFetch('/search', { q: queries.announcements, num: 10, tbs }),
-  ]);
+  return withQueryFallback('serper', url, domain, async (queries) => {
+    // Three parallel searches mirroring the Brave strategy, scoped to the
+    // monitored path rather than the whole domain.
+    const [webResults, newsResults, announcementResults] = await Promise.allSettled([
+      serperFetch('/search', { q: queries.primary, num: 20, tbs }),
+      serperFetch('/news', { q: queries.news, num: 10, tbs }),
+      serperFetch('/search', { q: queries.announcements, num: 10, tbs }),
+    ]);
 
-  if (webResults.status === 'rejected') {
-    throw new ScrapeError(`Serper web search failed for ${url}: ${describeError(webResults.reason)}`, {
-      provider: 'serper',
-      cause: webResults.reason,
-    });
-  }
+    if (webResults.status === 'rejected') {
+      // A 400 is Serper refusing the query shape — free accounts reject some
+      // operators. Let withQueryFallback retry with a plainer one rather than
+      // failing the engine.
+      if (isQueryRejection(webResults.reason)) throw webResults.reason;
+      throw new ScrapeError(
+        `Serper web search failed for ${url}: ${describeError(webResults.reason)}`,
+        { provider: 'serper', cause: webResults.reason }
+      );
+    }
 
-  const pages = [];
-  const notes = [];
+    const pages = [];
+    const notes = [`Serper query: ${queries.scope}`];
 
-  collectPages(pages, webResults.value?.organic, (r) => ({
-    type: 'web',
-    title: r.title || '',
-    url: r.link || '',
-    description: r.snippet || '',
-    published: r.date || '',
-    publishedDate: absoluteDate(r.date),
-  }));
-
-  if (newsResults.status === 'fulfilled') {
-    collectPages(pages, newsResults.value?.news, (r) => ({
-      type: 'news',
+    collectPages(pages, webResults.value?.organic, (r) => ({
+      type: 'web',
       title: r.title || '',
       url: r.link || '',
       description: r.snippet || '',
       published: r.date || '',
       publishedDate: absoluteDate(r.date),
     }));
-  } else {
-    notes.push(`Serper news search unavailable: ${describeError(newsResults.reason)}`);
-  }
 
-  if (announcementResults.status === 'fulfilled') {
-    collectPages(pages, announcementResults.value?.organic, (r) => ({
-      type: 'announcement',
-      title: r.title || '',
-      url: r.link || '',
-      description: r.snippet || '',
-      published: r.date || '',
-      publishedDate: absoluteDate(r.date),
-    }));
-  } else {
-    notes.push(`Serper announcement search unavailable: ${describeError(announcementResults.reason)}`);
-  }
+    if (newsResults.status === 'fulfilled') {
+      collectPages(pages, newsResults.value?.news, (r) => ({
+        type: 'news',
+        title: r.title || '',
+        url: r.link || '',
+        description: r.snippet || '',
+        published: r.date || '',
+        publishedDate: absoluteDate(r.date),
+      }));
+    } else {
+      notes.push(`Serper news search unavailable: ${describeError(newsResults.reason)}`);
+    }
 
-  return {
-    contentText: capContent(canonicalSearchContent(url, queries.scope, pages)),
-    source: 'serper',
-    pages,
-    notes,
-  };
+    if (announcementResults.status === 'fulfilled') {
+      collectPages(pages, announcementResults.value?.organic, (r) => ({
+        type: 'announcement',
+        title: r.title || '',
+        url: r.link || '',
+        description: r.snippet || '',
+        published: r.date || '',
+        publishedDate: absoluteDate(r.date),
+      }));
+    } else {
+      notes.push(`Serper announcement search unavailable: ${describeError(announcementResults.reason)}`);
+    }
+
+    return {
+      contentText: capContent(canonicalSearchContent(url, pages)),
+      source: 'serper',
+      pages,
+      notes,
+    };
+  });
 }
 
 async function serperFetch(endpoint, body) {
@@ -789,6 +899,7 @@ module.exports = {
   scrapeWebsite,
   scrapeWithProvider,
   availableEngines,
+  resetQueryVariantCache,
   scrapePdf,
   isPdfUrl,
   extractDomain,

@@ -16,7 +16,11 @@
  */
 
 const axios = require('axios');
-const { scrapeWithProvider, ScrapeError } = require('../src/services/scraper');
+const {
+  scrapeWithProvider,
+  ScrapeError,
+  resetQueryVariantCache,
+} = require('../src/services/scraper');
 const { computeDiff } = require('../src/services/diffService');
 
 const realAdapter = axios.defaults.adapter;
@@ -78,6 +82,9 @@ function mockSerper({ organic = [], news = [], announcements = [] } = {}) {
 }
 
 beforeEach(() => {
+  // Which query shape a provider accepts is remembered process-wide, so each
+  // test starts from the most precise one.
+  resetQueryVariantCache();
   process.env.BRAVE_API_KEY = 'test-brave-key';
   process.env.SERPER_API_KEY = 'test-serper-key';
   process.env.FIRECRAWL_API_KEY = 'test-firecrawl-key';
@@ -167,8 +174,38 @@ describe('Brave search normalisation', () => {
 
     // 21 Acts share sso.agc.gov.sg; a domain-wide query gave them all the same
     // results, so each reported on whatever AGC indexed most recently.
-    expect(queries[0]).toContain('inurl:/Act/WSHA2006');
+    // Asserted as page scoping rather than a specific operator: which operators
+    // an account may use is the provider's business, not this test's.
+    expect(queries[0]).toContain('/Act/WSHA2006');
     expect(queries[0]).not.toBe('site:sso.agc.gov.sg');
+  });
+
+  it('scopes with site: rather than inurl:, which free accounts reject', async () => {
+    const queries = [];
+    route((config) => {
+      queries.push(queryOf(config));
+      return isNewsCall(config) ? { data: { results: [] } } : { data: { web: { results: [] } } };
+    });
+
+    await scrapeWithProvider('brave', 'https://www.mtcr.info/en/mtcr-annex', 30);
+
+    // `site:` takes a host+path prefix, so it scopes to the page on its own.
+    expect(queries[0]).toBe('site:www.mtcr.info/en/mtcr-annex');
+    expect(queries.join(' ')).not.toContain('inurl:');
+  });
+
+  it('keeps the host the URL actually used, so the path prefix matches', async () => {
+    const queries = [];
+    route((config) => {
+      queries.push(queryOf(config));
+      return isNewsCall(config) ? { data: { results: [] } } : { data: { web: { results: [] } } };
+    });
+
+    await scrapeWithProvider('brave', 'https://www.mtcr.info/en/mtcr-annex', 30);
+
+    // Not the www-stripped `domain`: `site:mtcr.info/en/...` pairs a host with a
+    // path that never appeared together.
+    expect(queries[0]).toContain('www.mtcr.info');
   });
 
   it('still monitors the whole domain when the URL is a bare domain', async () => {
@@ -257,6 +294,159 @@ describe('Serper search normalisation', () => {
     await expect(scrapeWithProvider('serper', 'https://example.com/docs', 30)).rejects.toThrow(
       ScrapeError
     );
+  });
+});
+
+describe('restricted accounts (the query-pattern fallback)', () => {
+  /**
+   * Refuse any query matching `reject`, answer everything else. Mirrors a free
+   * Serper account: the rejection is a 400, deterministic per query shape.
+   */
+  function rejectPattern(reject, { organic = [], web = [] } = {}) {
+    const attempted = [];
+    route((config) => {
+      const q = queryOf(config);
+      attempted.push(q);
+      if (reject.test(q)) {
+        return { status: 400, data: { message: 'Query pattern not allowed for free accounts' } };
+      }
+      if (isNewsCall(config)) return { data: { news: [], results: [] } };
+      return { data: { organic, web: { results: web } } };
+    });
+    return attempted;
+  }
+
+  it('retries with a plainer query when Serper refuses the shape', async () => {
+    // This is the reported bug: the engine used to fail outright.
+    const attempted = rejectPattern(/^site:/, {
+      organic: [{ link: 'https://www.mtcr.info/en/mtcr-annex', title: 'MTCR Annex', snippet: 'x' }],
+    });
+
+    const { contentText } = await scrapeWithProvider(
+      'serper',
+      'https://www.mtcr.info/en/mtcr-annex',
+      30
+    );
+
+    expect(attempted[0]).toBe('site:www.mtcr.info/en/mtcr-annex');
+    expect(attempted).toContain('"www.mtcr.info/en/mtcr-annex"');
+    expect(contentText).toContain('https://www.mtcr.info/en/mtcr-annex');
+  });
+
+  it('does the same for Brave', async () => {
+    const attempted = rejectPattern(/^site:/, {
+      web: [{ url: 'https://example.com/page', title: 'Page', description: 'x' }],
+    });
+
+    const { contentText } = await scrapeWithProvider('brave', 'https://example.com/page', 30);
+
+    expect(attempted.some((q) => q.startsWith('"'))).toBe(true);
+    expect(contentText).toContain('https://example.com/page');
+  });
+
+  it('falls all the way back to a domain-wide query', async () => {
+    // An account that refuses both the scoped and the quoted shape still gets
+    // results, just without page scoping.
+    const attempted = rejectPattern(/mtcr-annex/, {
+      organic: [{ link: 'https://www.mtcr.info/other', title: 'Other', snippet: 'x' }],
+    });
+
+    const { contentText } = await scrapeWithProvider(
+      'serper',
+      'https://www.mtcr.info/en/mtcr-annex',
+      30
+    );
+
+    expect(attempted).toContain('site:mtcr.info');
+    expect(contentText).toContain('https://www.mtcr.info/other');
+  });
+
+  it('remembers the accepted shape, so later scans waste no call on it', async () => {
+    const first = rejectPattern(/^site:/, { organic: [] });
+    await scrapeWithProvider('serper', 'https://www.mtcr.info/en/mtcr-annex', 30);
+    expect(first.some((q) => q.startsWith('site:'))).toBe(true);
+
+    // A second scrape — of a different page, since the limit is account-wide.
+    const second = rejectPattern(/^site:/, { organic: [] });
+    await scrapeWithProvider('serper', 'https://www.mtcr.info/en/another-page', 30);
+
+    expect(second.some((q) => q.startsWith('site:'))).toBe(false);
+  });
+
+  it('still throws once every shape has been refused', async () => {
+    // A dead key must not be quietly downgraded to "nothing is indexed" — that
+    // would diff as every page having been removed.
+    rejectPattern(/.*/);
+
+    const attempt = () => scrapeWithProvider('serper', 'https://www.mtcr.info/en/mtcr-annex', 30);
+    await expect(attempt()).rejects.toThrow(ScrapeError);
+    // The message has to name the problem, not just "status code 400".
+    await expect(attempt()).rejects.toThrow(/refused every query form/);
+  });
+
+  it('gives a bare domain an operator-free shape to fall back to', async () => {
+    const attempted = rejectPattern(/^site:/, { organic: [] });
+
+    await scrapeWithProvider('serper', 'https://example.com', 30);
+
+    expect(attempted[0]).toBe('site:example.com');
+    expect(attempted).toContain('example.com');
+  });
+
+  it('does not retry a failure that is not about the query', async () => {
+    // A 429 is a rate limit, not a bad query: a plainer query would not help,
+    // and retrying would just spend more of an exhausted quota.
+    const primaries = [];
+    route((config) => {
+      if (isNewsCall(config)) return { data: { news: [] } };
+      primaries.push(queryOf(config));
+      return { status: 429, data: { message: 'Rate limit exceeded' } };
+    });
+
+    await expect(
+      scrapeWithProvider('serper', 'https://www.mtcr.info/en/mtcr-annex', 30)
+    ).rejects.toThrow(ScrapeError);
+
+    // One variant attempted: the primary and the announcements query of the
+    // first shape, and no second shape after them.
+    expect(primaries.every((q) => q.startsWith('site:www.mtcr.info/en/mtcr-annex'))).toBe(true);
+  });
+});
+
+describe('the query is not part of the content', () => {
+  it('leaves the query out of the hashed body', async () => {
+    mockBrave({ web: [braveWebResult('https://example.com/a', 'Page A', '1 day ago')] });
+    const { contentText, notes } = await scrapeWithProvider('brave', 'https://example.com/docs', 30);
+
+    // How we looked is configuration, not content: baking it into the snapshot
+    // made changing our own query strategy read as a change to the site.
+    // (Checking for a bare 'site:' would false-positive on "Website:".)
+    expect(contentText).not.toContain('site:example.com');
+    expect(contentText).not.toContain('Query scope');
+    // It still reaches the report.
+    expect(notes.join(' ')).toContain('site:example.com/docs');
+  });
+
+  it('gives identical content for identical results found by different queries', async () => {
+    const hit = braveWebResult('https://example.com/a', 'Page A', '2 days ago');
+
+    mockBrave({ web: [hit] });
+    const scoped = await scrapeWithProvider('brave', 'https://example.com/docs', 30);
+
+    // Force the plainer query shape, then return the same results.
+    resetQueryVariantCache();
+    route((config) => {
+      const q = queryOf(config);
+      if (q.startsWith('site:')) {
+        return { status: 400, data: { message: 'Query pattern not allowed for free accounts' } };
+      }
+      if (isNewsCall(config)) return { data: { results: [] } };
+      return { data: { web: { results: [hit] } } };
+    });
+    const plain = await scrapeWithProvider('brave', 'https://example.com/docs', 30);
+
+    expect(plain.contentText).toBe(scoped.contentText);
+    expect(computeDiff(scoped.contentText, plain.contentText).hasChanges).toBe(false);
   });
 });
 
