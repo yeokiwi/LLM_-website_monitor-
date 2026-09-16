@@ -180,38 +180,69 @@ describe('Brave search normalisation', () => {
     expect(queries[0]).not.toBe('site:sso.agc.gov.sg');
   });
 
-  it('scopes by exact phrase, because Brave\'s site: takes no path', async () => {
+  it('scopes the page with site: and a path', async () => {
     const queries = [];
     route((config) => {
       queries.push(queryOf(config));
       return isNewsCall(config) ? { data: { results: [] } } : { data: { web: { results: [] } } };
     });
 
-    await scrapeWithProvider('brave', 'https://www.mtcr.info/en/mtcr-annex', 30);
+    await scrapeWithProvider('brave', 'https://www.mtcr.info/en/mtcr-annex');
 
-    // Brave documents `site:` for domains and subdomains only. A path inside it
-    // matches nothing and returns a healthy, empty 200 — which is how this got
-    // reported as "zero indexed results" rather than as an error.
-    expect(queries[0]).toBe('"www.mtcr.info/en/mtcr-annex"');
+    // Measured against the live API: this shape returns the monitored page on
+    // both providers. An exact-phrase query returns zero on Brave, and `inurl:`
+    // is refused by free Serper accounts.
+    expect(queries[0]).toBe('site:www.mtcr.info/en/mtcr-annex');
     expect(queries.join(' ')).not.toContain('inurl:');
-    expect(queries.join(' ')).not.toContain('site:www.mtcr.info/en');
   });
 
-  it('does not filter the snapshot query by recency', async () => {
-    // The primary is the snapshot: "what is indexed here now". Filtering it by
-    // freshness starves a stable page of results, and makes the snapshot shrink
-    // on its own as entries age out — which then diffs as pages being removed.
+  it('sends no recency filter on any call', async () => {
+    // Measured: every freshness value, including `py`, collapses a real
+    // monitored site to zero results on /web/search. Recency comes from the
+    // dates on the results instead.
     const calls = [];
     route((config) => {
       calls.push({ url: config.url, freshness: config.params?.freshness });
       return isNewsCall(config) ? { data: { results: [] } } : { data: { web: { results: [] } } };
     });
 
-    await scrapeWithProvider('brave', 'https://example.com/docs', 30);
+    await scrapeWithProvider('brave', 'https://example.com/docs');
 
-    expect(calls[0].freshness).toBeUndefined();
-    // Recency is still the point of the news and announcement passes.
-    expect(calls.slice(1).some((c) => c.freshness === 'pm')).toBe(true);
+    expect(calls.every((c) => c.freshness === undefined)).toBe(true);
+  });
+
+  it('scopes news and announcements to the domain, not the page', async () => {
+    // Page-scoped, those two return only the monitored page itself — measured 0
+    // results on Serper and 1 on Brave, against 9-10 domain-scoped. They are the
+    // "what is happening around this site" signal.
+    const byCall = [];
+    route((config) => {
+      byCall.push({ news: isNewsCall(config), q: queryOf(config) });
+      return isNewsCall(config) ? { data: { results: [] } } : { data: { web: { results: [] } } };
+    });
+
+    await scrapeWithProvider('brave', 'https://www.mtcr.info/en/mtcr-annex');
+
+    expect(byCall[0].q).toContain('/en/mtcr-annex');
+    const news = byCall.find((c) => c.news);
+    const announcements = byCall.find((c) => !c.news && c.q.includes('OR'));
+    expect(news.q).toBe('mtcr.info');
+    expect(announcements.q).not.toContain('/en/mtcr-annex');
+    expect(announcements.q).toContain('site:mtcr.info');
+  });
+
+  it('asks Serper for no more than 10 results', async () => {
+    // Measured: any operator query with num > 10 returns
+    // 400 "Query pattern not allowed for free accounts". The boundary is exact.
+    const nums = [];
+    route((config) => {
+      nums.push(JSON.parse(config.data || '{}').num);
+      return isNewsCall(config) ? { data: { news: [] } } : { data: { organic: [] } };
+    });
+
+    await scrapeWithProvider('serper', 'https://www.mtcr.info/en/mtcr-annex');
+
+    expect(nums.every((n) => n <= 10)).toBe(true);
   });
 
   it('keeps the host the URL actually used, so the path prefix matches', async () => {
@@ -349,7 +380,7 @@ describe('restricted accounts (the query-pattern fallback)', () => {
     );
 
     expect(attempted[0]).toBe('site:www.mtcr.info/en/mtcr-annex');
-    expect(attempted).toContain('"www.mtcr.info/en/mtcr-annex"');
+    expect(attempted).toContain('mtcr.info'); // the operator-free rung
     expect(contentText).toContain('https://www.mtcr.info/en/mtcr-annex');
   });
 
@@ -360,7 +391,7 @@ describe('restricted accounts (the query-pattern fallback)', () => {
 
     const { contentText } = await scrapeWithProvider('brave', 'https://example.com/page', 30);
 
-    expect(attempted.some((q) => q.startsWith('"'))).toBe(true);
+    expect(attempted).toContain('example.com'); // the operator-free rung
     expect(contentText).toContain('https://example.com/page');
   });
 
@@ -427,9 +458,9 @@ describe('restricted accounts (the query-pattern fallback)', () => {
       scrapeWithProvider('serper', 'https://www.mtcr.info/en/mtcr-annex', 30)
     ).rejects.toThrow(ScrapeError);
 
-    // One variant attempted: the primary and the announcements query of the
-    // first shape, and no second shape after them.
-    expect(primaries.every((q) => q.startsWith('site:www.mtcr.info/en/mtcr-annex'))).toBe(true);
+    // One variant attempted: no second, plainer primary after the 429.
+    expect(primaries.filter((q) => q === 'site:www.mtcr.info/en/mtcr-annex')).toHaveLength(1);
+    expect(primaries).not.toContain('site:mtcr.info');
   });
 });
 
@@ -465,7 +496,7 @@ describe('pages with no index entry of their own', () => {
       30
     );
 
-    expect(attempted[0]).toBe('"www.mtcr.info/en/mtcr-annex"');
+    expect(attempted[0]).toBe('site:www.mtcr.info/en/mtcr-annex');
     expect(attempted).toContain('site:mtcr.info');
     expect(pages.length).toBeGreaterThan(0);
     expect(contentText).toContain('https://www.mtcr.info/en/news');
@@ -504,6 +535,63 @@ describe('pages with no index entry of their own', () => {
     expect(attempted).toContain('site:mtcr.info'); // it did try to widen
   });
 
+  it('widens when only the domain-scoped passes have hits', async () => {
+    // Measured against Brave: `site:sso.agc.gov.sg/Act/WSHA2006` has nothing
+    // indexed, but the news and announcement passes are domain-scoped at every
+    // rung and returned hits anyway. Counting those as success meant the ladder
+    // never widened, and the snapshot carried a page-scoped label over results
+    // that had never been about the page.
+    const attempted = [];
+    route((config) => {
+      const q = queryOf(config);
+      attempted.push(q);
+      if (isNewsCall(config)) {
+        return { data: { results: [braveWebResult('https://agc.example/news', 'Domain news')] } };
+      }
+      if (isAnnouncementCall(config)) {
+        return { data: { web: { results: [braveWebResult('https://agc.example/blog', 'Blog')] } } };
+      }
+      // The primary — page-scoped at rung 0, domain-wide at rung 1.
+      return {
+        data: {
+          web: {
+            results: /^site:sso\.agc\.gov\.sg$/.test(q)
+              ? [braveWebResult('https://sso.agc.gov.sg/', 'AGC home')]
+              : [],
+          },
+        },
+      };
+    });
+
+    const { notes, contentText } = await scrapeWithProvider(
+      'brave',
+      'https://sso.agc.gov.sg/Act/WSHA2006',
+      30
+    );
+
+    const primaries = attempted.filter((q) => q.startsWith('site:sso.agc.gov.sg'));
+    expect(primaries).toContain('site:sso.agc.gov.sg/Act/WSHA2006');
+    expect(primaries).toContain('site:sso.agc.gov.sg');
+    expect(notes.join(' ')).toMatch(/whole domain/i);
+    expect(contentText).toContain('https://sso.agc.gov.sg/');
+  });
+
+  it('declares the page unfound when no rung matches it', async () => {
+    // Every rung empty for the page, but the domain-scoped passes still fill
+    // `pages`. Without the note the report reads as a page-level snapshot.
+    route((config) => {
+      if (isNewsCall(config)) {
+        return { data: { results: [braveWebResult('https://agc.example/news', 'Domain news')] } };
+      }
+      return { data: { web: { results: [] } } };
+    });
+
+    const { notes } = await scrapeWithProvider('brave', 'https://sso.agc.gov.sg/Act/EA1968', 30);
+
+    expect(notes.join(' ')).toMatch(/No search result matched/i);
+    expect(notes.join(' ')).toContain('sso.agc.gov.sg/Act/EA1968');
+  });
+
   it('remembers the productive scope per URL, not per account', async () => {
     // An obscure page falling back to domain-wide must not drag every other
     // website down with it.
@@ -518,7 +606,7 @@ describe('pages with no index entry of their own', () => {
     await scrapeWithProvider('brave', 'https://www.mtcr.info/en/other-page', 30);
 
     // The second URL starts at its own most precise shape.
-    expect(other[0]).toBe('"www.mtcr.info/en/other-page"');
+    expect(other[0]).toBe('site:www.mtcr.info/en/other-page');
   });
 
   it('does not widen a bare-domain monitor past its own domain', async () => {

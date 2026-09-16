@@ -11,12 +11,16 @@
  * method; `auto` (the default) uses whichever provider's API key is configured.
  * See resolveScraperProvider() for the precedence rules.
  *
- * The Brave and Serper paths are period-aware: they adjust search freshness so
- * recent content is surfaced first, and run a dedicated "announcements" search
- * to capture releases, changelog entries, and blog posts. They are scoped to the
- * monitored *page* rather than its whole domain — a domain-wide `site:` query
- * gives every URL on a shared host (21 Acts on sso.agc.gov.sg, say) the same
- * results, so each one reports on whatever the host published most recently.
+ * The Brave and Serper paths snapshot the monitored *page* rather than its whole
+ * domain — a domain-wide `site:` query gives every URL on a shared host (21 Acts
+ * on sso.agc.gov.sg, say) the same results, so each one would report on whatever
+ * the host published most recently. Alongside that they run news and
+ * announcement passes, which are domain-scoped on purpose: those are the
+ * "what is happening around this site" signal.
+ *
+ * Neither path filters by recency. Both providers' recency filters were measured
+ * to return zero results on a real monitored site even at their widest setting,
+ * so recency comes from the dates on the results instead.
  *
  * Every scraper here either returns real content or throws a ScrapeError. It
  * must never return a placeholder string: a placeholder gets snapshotted like
@@ -102,42 +106,33 @@ function absoluteDate(raw) {
 }
 
 /**
- * What each search backend's query language actually supports.
- *
- * Both of these are from the providers' own documentation, not inference — the
- * cost of guessing here has been two rounds of silent breakage:
- *
- *  - Serper is Google, whose `site:` takes a host *and path* prefix, so
- *    `site:host/path` scopes to one page. Free Serper accounts reject `inurl:`
- *    with an HTTP 400 ("Query pattern not allowed for free accounts").
- *  - Brave's `site:` is documented for domains and subdomains only, and it has
- *    no `inurl:` at all. A path in `site:` matches nothing and comes back as a
- *    perfectly healthy HTTP 200 with zero results, which is why Brave reported
- *    "zero indexed results" rather than an error. Brave does support exact
- *    phrases, so a quoted URL is how a page is scoped there.
- */
-const PROVIDER_QUERY_SUPPORT = {
-  serper: { pathScopedSite: true },
-  brave: { pathScopedSite: false },
-};
-
-/**
  * The search queries for a monitored URL, most precise first.
  *
- * A URL with a path is monitored as a page: results are restricted to that page
- * so two Acts on the same host no longer receive identical results. A bare
- * domain is still monitored as a domain.
+ * Shapes and ordering here are measured against both live APIs, not inferred —
+ * two rounds of inferring them shipped silent breakage:
  *
- * The list is a ladder rather than a single query because a provider can refuse
- * a shape (HTTP 400) or quietly match nothing with it (HTTP 200, no results),
- * and neither is something this code can predict for every account. The entries
- * below get progressively plainer, ending at domain-wide so a page with no
- * index presence of its own still reports something.
+ *   site:<host><path>   1 result on Brave and on Serper: the monitored page
+ *   site:<domain>       16 on Brave, 10 on Serper
+ *   <domain>            plain text; the only shape no operator rule can refuse
+ *
+ * A quoted `"host/path"` rung used to sit second. It is gone: Brave returns
+ * zero for it, and Serper treats it as an operator query like any other, so it
+ * added a wasted call on both.
+ *
+ * The ladder exists because a provider can refuse a shape (HTTP 400) or quietly
+ * match nothing with it (HTTP 200, no results). Neither is predictable per
+ * account, so the entries get progressively plainer, ending domain-wide so a
+ * page with no index presence of its own still reports something.
+ *
+ * `news` and `announcements` are deliberately domain-scoped at every rung. They
+ * are the "what is happening around this site" signal; scoped to the page they
+ * return only the monitored page itself — measured 0 results on Serper and 1 on
+ * Brave, against 9-10 domain-scoped.
  *
  * @returns {Array<{ scope: string, primary: string, news: string,
  *                   announcements: string, pageScoped: boolean }>}
  */
-function queryVariants(url, domain, provider) {
+function queryVariants(url, domain) {
   let host = domain;
   let path = '';
   try {
@@ -150,44 +145,37 @@ function queryVariants(url, domain, provider) {
     /* not a parseable URL — fall through to domain scope */
   }
 
+  const news = domain;
+  const announcements = `site:${domain} (blog OR changelog OR "release notes" OR announcement OR "what's new" OR news OR updates)`;
+
   const domainWide = {
     scope: `site:${domain}`,
     primary: `site:${domain}`,
-    news: domain,
-    announcements: `site:${domain} (blog OR changelog OR "release notes" OR announcement OR "what's new" OR news OR updates)`,
+    news,
+    announcements,
     pageScoped: false,
   };
   const domainPlain = {
     scope: domain,
     primary: domain,
-    news: domain,
+    news,
     announcements: `${domain} news updates`,
     pageScoped: false,
   };
 
   if (!path) return [domainWide, domainPlain];
 
-  const bare = `${host}${path}`;
-  const quoted = {
-    scope: `"${bare}"`,
-    primary: `"${bare}"`,
-    news: `"${bare}"`,
-    announcements: `"${bare}" update`,
-    pageScoped: true,
-  };
-
-  const ladder = [];
-  if (PROVIDER_QUERY_SUPPORT[provider]?.pathScopedSite) {
-    ladder.push({
-      scope: `site:${bare}`,
-      primary: `site:${bare}`,
-      news: `"${bare}"`,
-      announcements: `site:${bare} (update OR amendment OR revision OR changelog OR "release notes" OR announcement)`,
+  return [
+    {
+      scope: `site:${host}${path}`,
+      primary: `site:${host}${path}`,
+      news,
+      announcements,
       pageScoped: true,
-    });
-  }
-  ladder.push(quoted, domainWide, domainPlain);
-  return ladder;
+    },
+    domainWide,
+    domainPlain,
+  ];
 }
 
 /**
@@ -227,8 +215,15 @@ const productiveVariants = new Map();
  *
  * `run(variant)` performs that provider's searches and must reject with the
  * primary search's error when the primary fails — the primary is the snapshot,
- * so its failure is the engine's failure. It returns the scrape result, which
- * carries `pages`; an empty `pages` is what "matched nothing" looks like.
+ * so its failure is the engine's failure. It returns the scrape result carrying
+ * `primaryCount`: how many results the *page-scoped* search produced.
+ *
+ * That count, not `pages.length`, is what "matched nothing" means. `pages` also
+ * holds the news and announcement passes, which are domain-scoped at every rung
+ * — so a page with no index entry of its own still came back with a dozen
+ * domain-wide hits, the ladder read that as success, and the snapshot was
+ * labelled page-scoped while containing nothing of the kind. Measured: Brave
+ * has nothing indexed for `sso.agc.gov.sg/Act/WSHA2006`, yet returned 4 pages.
  *
  * Two different signals, handled differently:
  *
@@ -244,7 +239,7 @@ const productiveVariants = new Map();
  * limit, and a plainer query would only spend more of an exhausted quota.
  */
 async function withQueryFallback(provider, url, domain, run) {
-  const variants = queryVariants(url, domain, provider);
+  const variants = queryVariants(url, domain);
   const refusedFloor = refusedVariants.get(provider) ?? 0;
   const start = Math.min(
     Math.max(refusedFloor, productiveVariants.get(`${provider} ${url}`) ?? 0),
@@ -265,7 +260,7 @@ async function withQueryFallback(provider, url, domain, run) {
       continue;
     }
 
-    if (result.pages.length > 0) {
+    if (primaryResultCount(result) > 0) {
       productiveVariants.set(`${provider} ${url}`, i);
       return result;
     }
@@ -275,7 +270,15 @@ async function withQueryFallback(provider, url, domain, run) {
     if (firstEmpty === null) firstEmpty = result;
   }
 
-  if (firstEmpty) return firstEmpty;
+  if (firstEmpty) {
+    // Nothing anywhere on the ladder could see this page. Say so on the result
+    // rather than letting a page-scoped label sit above domain-wide context.
+    // Notes are not part of the hashed snapshot body, so this cannot diff.
+    firstEmpty.notes.push(
+      `No search result matched ${url} itself under any query form; any results listed cover ${domain} generally.`
+    );
+    return firstEmpty;
+  }
 
   // Every shape refused. Say that, rather than surfacing the bare
   // "Request failed with status code 400" — which query was rejected is the
@@ -284,6 +287,16 @@ async function withQueryFallback(provider, url, domain, run) {
     `${provider} refused every query form for ${url}: ${describeError(lastError)}`,
     { provider, cause: lastError }
   );
+}
+
+/**
+ * How many results the primary (page-scoped) search returned.
+ *
+ * Falls back to the full page count for a provider that does not report one,
+ * which keeps the old behaviour rather than treating the result as empty.
+ */
+function primaryResultCount(result) {
+  return result.primaryCount ?? result.pages.length;
 }
 
 /** Test seam: forget what providers have been seen to refuse or find. */
@@ -300,10 +313,9 @@ function resetQueryVariantCache() {
  * changes within the document itself.
  *
  * @param {string} url
- * @param {number} [periodDays=30] — used to tune search freshness
  * @returns {{ contentText: string, source: 'pdf'|'firecrawl'|'brave'|'direct', pages: Array }}
  */
-async function scrapeWebsite(url, periodDays = 30) {
+async function scrapeWebsite(url) {
   if (await isPdfUrl(url)) {
     return scrapePdf(url);
   }
@@ -313,10 +325,10 @@ async function scrapeWebsite(url, periodDays = 30) {
     return scrapeWithFirecrawl(url);
   }
   if (provider === 'brave') {
-    return scrapeWithBrave(url, periodDays);
+    return scrapeWithBrave(url);
   }
   if (provider === 'serper') {
-    return scrapeWithSerper(url, periodDays);
+    return scrapeWithSerper(url);
   }
   return scrapeWithCheerio(url);
 }
@@ -390,13 +402,12 @@ function availableEngines(requested) {
  *
  * @param {'firecrawl'|'brave'|'serper'|'direct'} provider
  * @param {string} url
- * @param {number} [periodDays=30]
  * @returns {{ contentText: string, source: string, pages: Array }}
  */
-async function scrapeWithProvider(provider, url, periodDays = 30) {
+async function scrapeWithProvider(provider, url) {
   if (provider === 'firecrawl') return scrapeWithFirecrawl(url);
-  if (provider === 'brave') return scrapeWithBrave(url, periodDays);
-  if (provider === 'serper') return scrapeWithSerper(url, periodDays);
+  if (provider === 'brave') return scrapeWithBrave(url);
+  if (provider === 'serper') return scrapeWithSerper(url);
   return scrapeWithCheerio(url);
 }
 
@@ -510,34 +521,28 @@ async function scrapePdf(url) {
 // Brave Search API
 // ---------------------------------------------------------------------------
 
-/**
- * Maps a monitoring period to a Brave freshness filter.
- *   pw = past week | pm = past month | py = past year
- */
-function braveFreshness(periodDays) {
-  if (periodDays <= 7) return 'pw';
-  if (periodDays <= 31) return 'pm';
-  return 'py';
-}
 
-async function scrapeWithBrave(url, periodDays) {
+async function scrapeWithBrave(url) {
   const domain = extractDomain(url);
-  const freshness = braveFreshness(periodDays);
 
   return withQueryFallback('brave', url, domain, async (queries) => {
     // Three parallel searches:
     //  1. Indexed pages at the monitored path (main content snapshot)
     //  2. News coverage mentioning the page or domain
     //  3. Announcement / changelog / release pages at that path
-    // No freshness on the primary. It is the snapshot: it should answer "what
-    // is indexed here now", and filtering it by recency both starves a stable
-    // page of results and makes the snapshot shrink on its own as entries age
-    // out of the window — which then diffs as pages being removed. Recency is
-    // the point of the news and announcement passes, so it stays on those.
+    // No recency filter anywhere. Measured on this deployment's own key:
+    // `site:mtcr.info` returns 16 results unfiltered and **0** at every
+    // freshness setting including `py` ("past year"), and the announcements
+    // query goes 9 -> 0 the same way. It was applied to both `/web/search`
+    // calls, which is what emptied Brave entirely.
+    //
+    // Recency is not lost: results carry `page_age`, which `absoluteDate`
+    // normalises and the prompt shows. The dates come from the results rather
+    // than from a server-side filter that returns nothing.
     const [webResults, newsResults, announcementResults] = await Promise.allSettled([
       braveFetch('/web/search', { q: queries.primary, count: 20 }),
-      braveFetch('/news/search', { q: queries.news, count: 10, freshness }),
-      braveFetch('/web/search', { q: queries.announcements, count: 10, freshness }),
+      braveFetch('/news/search', { q: queries.news, count: 10 }),
+      braveFetch('/web/search', { q: queries.announcements, count: 10 }),
     ]);
 
     // The primary search is the snapshot. If it failed — an exhausted quota, a
@@ -568,6 +573,10 @@ async function scrapeWithBrave(url, periodDays) {
       published: r.page_age || r.age || '',
       publishedDate: absoluteDate(r.page_age || r.age),
     }));
+
+    // Counted before the domain-scoped passes append to `pages`: this is the
+    // only number that says whether the monitored page is indexed at all.
+    const primaryCount = pages.length;
 
     if (newsResults.status === 'fulfilled') {
       // `meta_url.path` was previously used as a date fallback; it is a URL path,
@@ -602,6 +611,7 @@ async function scrapeWithBrave(url, periodDays) {
       source: 'brave',
       pages,
       notes,
+      primaryCount,
     };
   });
 }
@@ -672,29 +682,27 @@ function canonicalSearchContent(url, pages) {
 // Serper (Google Search API)
 // ---------------------------------------------------------------------------
 
-/**
- * Maps a monitoring period to a Serper `tbs` time filter.
- *   qdr:w = past week | qdr:m = past month | qdr:y = past year
- */
-function serperTbs(periodDays) {
-  if (periodDays <= 7) return 'qdr:w';
-  if (periodDays <= 31) return 'qdr:m';
-  return 'qdr:y';
-}
 
-async function scrapeWithSerper(url, periodDays) {
+async function scrapeWithSerper(url) {
   const domain = extractDomain(url);
-  const tbs = serperTbs(periodDays);
 
   return withQueryFallback('serper', url, domain, async (queries) => {
     // Three parallel searches mirroring the Brave strategy, scoped to the
     // monitored path rather than the whole domain.
-    // No `tbs` on the primary — see the note in scrapeWithBrave: the snapshot
-    // query must not be filtered by recency.
+    // `num: 10`, not 20. Measured against a free Serper account: any query
+    // containing a search operator returns
+    // `400 "Query pattern not allowed for free accounts."` when `num > 10` —
+    // the boundary is exact, 10 passes and 11 fails — while the same query at
+    // `num: 10` returns results. `num: 20` on this call is what has been
+    // failing Serper, not any particular operator.
+    //
+    // No `tbs`, for the same reason Brave has no freshness, and measured the
+    // same way: the announcements query returns 10 results without it and 0
+    // with, and `/news` returns 8 without and 0 with.
     const [webResults, newsResults, announcementResults] = await Promise.allSettled([
-      serperFetch('/search', { q: queries.primary, num: 20 }),
-      serperFetch('/news', { q: queries.news, num: 10, tbs }),
-      serperFetch('/search', { q: queries.announcements, num: 10, tbs }),
+      serperFetch('/search', { q: queries.primary, num: 10 }),
+      serperFetch('/news', { q: queries.news, num: 10 }),
+      serperFetch('/search', { q: queries.announcements, num: 10 }),
     ]);
 
     if (webResults.status === 'rejected') {
@@ -723,6 +731,8 @@ async function scrapeWithSerper(url, periodDays) {
       published: r.date || '',
       publishedDate: absoluteDate(r.date),
     }));
+
+    const primaryCount = pages.length;
 
     if (newsResults.status === 'fulfilled') {
       collectPages(pages, newsResults.value?.news, (r) => ({
@@ -755,6 +765,7 @@ async function scrapeWithSerper(url, periodDays) {
       source: 'serper',
       pages,
       notes,
+      primaryCount,
     };
   });
 }

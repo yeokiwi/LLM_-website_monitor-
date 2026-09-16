@@ -75,12 +75,19 @@ RULES:
 - Always include dates when they appear in the source material.
 - If a section has nothing to report, write exactly: "Nothing detected for this period."`;
 
-// Default models per provider family
-const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-6';
+// Default models per provider family. `LLM_MODEL` overrides either.
+const DEFAULT_CLAUDE_MODEL = 'claude-opus-5';
 const DEFAULT_OPENAI_MODEL = 'gpt-4o';
 
-// Maximum tokens for structured reports
-const MAX_TOKENS = 4096;
+/**
+ * Output budget for a report.
+ *
+ * 4096 was too tight once thinking is in play: it can consume the whole budget
+ * before a single word of the report is written, which surfaces as an empty
+ * response rather than an error. 16000 is the documented default for
+ * non-streaming requests.
+ */
+const MAX_TOKENS = 16000;
 
 /**
  * Diff budget for a single report call — roughly 7,500 tokens, so an ordinary
@@ -230,6 +237,42 @@ function requestTimeoutMs() {
 
 const EMPTY_ANALYSIS = '## Executive Summary\n\nNo analysis generated.';
 
+/**
+ * Pull the report text out of a Claude response.
+ *
+ * Every text block, not `content[0]`. Current models think by default, so the
+ * first block is routinely a `thinking` block whose `.text` is undefined —
+ * which is how a perfectly good response became "No analysis generated".
+ *
+ * `stop_reason` is checked first because two of its values mean the report is
+ * not a report: a refusal has no content to read, and a `max_tokens` stop is a
+ * report cut off mid-sentence. Both used to be filed as clean results.
+ */
+function readClaudeReport(message) {
+  const text = (message.content || [])
+    .filter((block) => block.type === 'text')
+    .map((block) => block.text)
+    .join('')
+    .trim();
+
+  if (message.stop_reason === 'refusal') {
+    return (
+      '## Executive Summary\n\nThe model declined to analyse this content' +
+      `${message.stop_details?.category ? ` (${message.stop_details.category})` : ''}. ` +
+      'No report was produced.'
+    );
+  }
+
+  if (message.stop_reason === 'max_tokens') {
+    // Say so rather than presenting a truncated report as a complete one.
+    return text
+      ? `${text}\n\n---\n\n_Report truncated: the model reached its output limit._`
+      : '## Executive Summary\n\nThe model reached its output limit before writing any report.';
+  }
+
+  return text || EMPTY_ANALYSIS;
+}
+
 // ---------------------------------------------------------------------------
 // Claude (Anthropic)
 // ---------------------------------------------------------------------------
@@ -250,7 +293,7 @@ async function callClaude(userMessage, systemPrompt = SYSTEM_PROMPT) {
   });
 
   return {
-    markdown: message.content[0]?.text || EMPTY_ANALYSIS,
+    markdown: readClaudeReport(message),
     usage: {
       inputTokens: message.usage?.input_tokens || 0,
       outputTokens: message.usage?.output_tokens || 0,
@@ -287,8 +330,14 @@ async function callOpenAICompatible(userMessage, systemPrompt = SYSTEM_PROMPT) {
     ],
   });
 
+  const choice = completion.choices?.[0];
+  const content = (choice?.message?.content || '').trim();
+
   return {
-    markdown: completion.choices[0]?.message?.content || EMPTY_ANALYSIS,
+    markdown:
+      choice?.finish_reason === 'length' && content
+        ? `${content}\n\n---\n\n_Report truncated: the model reached its output limit._`
+        : content || EMPTY_ANALYSIS,
     usage: {
       inputTokens: completion.usage?.prompt_tokens || 0,
       outputTokens: completion.usage?.completion_tokens || 0,
@@ -404,4 +453,4 @@ function getLLMInfo() {
   };
 }
 
-module.exports = { summarizeChanges, getLLMInfo };
+module.exports = { summarizeChanges, getLLMInfo, readClaudeReport };

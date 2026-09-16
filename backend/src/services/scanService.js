@@ -98,7 +98,7 @@ function resolveProviders(website, ownerId) {
 
 /** Scrape, snapshot, diff and summarise one website with one engine. */
 async function scanOneProvider(website, periodDays, provider, ledger) {
-  const { contentText, pages, notes } = await scrapeWithProvider(provider, website.url, periodDays);
+  const { contentText, pages, notes } = await scrapeWithProvider(provider, website.url);
 
   const snap = saveSnapshot(website.id, contentText, provider);
   const baseline = findBaselineSnapshot(website.id, periodDays, provider, snap.id);
