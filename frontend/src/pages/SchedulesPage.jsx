@@ -65,8 +65,6 @@ export default function SchedulesPage() {
     return <div className={s.page}><p className={s.loading}>Loading…</p></div>;
   }
 
-  const schedulingLocked = allowed.length === 0;
-
   return (
     <div className={s.page}>
       <header className={s.header}>
@@ -110,7 +108,7 @@ export default function SchedulesPage() {
                     <select
                       className={s.select}
                       value={current}
-                      disabled={busyId === website.id || schedulingLocked}
+                      disabled={busyId === website.id}
                       onChange={(e) => handleChange(website, e.target.value)}
                     >
                       <option value="off">Manual only</option>
@@ -118,10 +116,12 @@ export default function SchedulesPage() {
                         <option
                           key={frequency}
                           value={frequency}
+                          // `allowed` is whatever the API reports it supports.
+                          // That is every cadence now, but reading it from the
+                          // response keeps the two in step if it ever narrows.
                           disabled={!allowed.includes(frequency)}
                         >
                           {FREQUENCY_LABELS[frequency]}
-                          {allowed.includes(frequency) ? '' : ' (upgrade)'}
                         </option>
                       ))}
                     </select>

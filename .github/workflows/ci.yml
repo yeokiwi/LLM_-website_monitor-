@@ -27,7 +27,7 @@ jobs:
         run: npm test
 
   frontend:
-    name: Frontend build
+    name: Frontend lint and build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,6 +41,13 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: npm ci
+
+      # Runs before the build because the build cannot catch this class of bug:
+      # a call to an identifier that no longer exists compiles fine and only
+      # throws in the browser, where it blanks the page.
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
 
       - name: Build
         working-directory: frontend

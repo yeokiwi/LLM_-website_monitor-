@@ -1,14 +1,10 @@
 /**
- * Tenant-facing data export.
+ * Spreadsheet export for the monitored websites.
  *
- * The old whole-database backup and restore is gone from here: on a
- * multi-tenant platform that file holds every customer's data, so it is now a
- * platform-operator action. What a subscriber gets instead is their own data —
- * a spreadsheet that round-trips with the importer, and a full JSON export on
- * the billing page.
+ * The exported columns round-trip with the importer above it on the dashboard,
+ * so a list can be pulled out, edited in Excel and pushed back.
  */
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
 import { exportWebsites, downloadBlob, readBlobError } from '../api/client';
 import s from './DataBackup.module.css';
 

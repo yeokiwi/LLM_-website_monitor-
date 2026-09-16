@@ -8,6 +8,7 @@ import SchedulesPage from './pages/SchedulesPage';
 import ReportPage from './pages/ReportPage';
 import HelpPage from './pages/HelpPage';
 
+import ErrorBoundary from './components/ErrorBoundary';
 import { ScanProvider, useScan } from './context/ScanContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { getHealth } from './api/client';
@@ -111,26 +112,30 @@ export default function App() {
   return (
     <AuthProvider>
       <ScanProvider>
-        <Routes>
-          {/* Public */}
-          <Route
-            path="/login"
-            element={<RedirectIfAuthenticated><LoginPage /></RedirectIfAuthenticated>}
-          />
+        {/* A render error inside any page shows a message rather than
+            unmounting the tree and leaving a blank white document. */}
+        <ErrorBoundary>
+          <Routes>
+            {/* Public */}
+            <Route
+              path="/login"
+              element={<RedirectIfAuthenticated><LoginPage /></RedirectIfAuthenticated>}
+            />
 
-          {/* Signed in */}
-          <Route element={<RequireAuth />}>
-            <Route element={<AppShell />}>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/history" element={<History />} />
-              <Route path="/schedules" element={<SchedulesPage />} />
-              <Route path="/report/:id" element={<ReportPage />} />
-              <Route path="/help" element={<HelpPage />} />
+            {/* Signed in */}
+            <Route element={<RequireAuth />}>
+              <Route element={<AppShell />}>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/history" element={<History />} />
+                <Route path="/schedules" element={<SchedulesPage />} />
+                <Route path="/report/:id" element={<ReportPage />} />
+                <Route path="/help" element={<HelpPage />} />
+              </Route>
             </Route>
-          </Route>
 
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </ErrorBoundary>
       </ScanProvider>
     </AuthProvider>
   );

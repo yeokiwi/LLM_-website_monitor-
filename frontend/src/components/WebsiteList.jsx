@@ -166,7 +166,7 @@ export default function WebsiteList({
                   ['brave', 'use_brave', 'Brave'],
                   ['serper', 'use_serper', 'Serper'],
                 ].map(([engine, field, label]) =>
-                  canManage && engineAllowed(engine) ? (
+                  canManage ? (
                     <ScraperAllCheckbox
                       key={engine}
                       label={label}
