@@ -50,14 +50,39 @@ const router = express.Router();
  * foreign key to `websites` by design (see migrations.js), but it does reference
  * `users`, so it re-owns with the rest.
  *
+ * Groups follow the same rule: a membership row before its group, a group's
+ * schedule before the group, and all of them before `websites`.
+ *
  * `users` is deliberately absent: the local account stays put. So is
  * `schema_migrations`, which has to describe the local schema rather than
- * whatever the backup was taken from.
+ * whatever the backup was taken from. So is `app_settings`: it is this
+ * instance's configuration, and restoring someone else's backup must not
+ * redirect this instance's alerts to their recipients.
  */
-const RESTORE_TABLES = ['scan_results', 'snapshots', 'schedules', 'websites'];
+const RESTORE_TABLES = [
+  'scan_results',
+  'snapshots',
+  'schedules',
+  'group_schedules',
+  'website_group_members',
+  'website_groups',
+  'websites',
+];
+
+/**
+ * Tables that postdate some backups. An older file without them is still
+ * restorable — it simply has none of those rows to bring. Without this, adding
+ * a table would make every backup taken before it unrestorable.
+ */
+const OPTIONAL_TABLES = new Set([
+  'schedules',
+  'group_schedules',
+  'website_group_members',
+  'website_groups',
+]);
 
 /** Tables whose `owner_id` is rewritten to the importing account. */
-const OWNED_TABLES = ['websites', 'scan_results', 'schedules'];
+const OWNED_TABLES = ['websites', 'scan_results', 'schedules', 'website_groups', 'group_schedules'];
 
 /**
  * Columns blanked out of an exported copy.
@@ -204,6 +229,7 @@ router.post('/import', upload.single('file'), (req, res) => {
     // 1. Validate the uploaded file is a sound SQLite DB with our tables.
     const srcColumns = {};
     let duplicateUrls = [];
+    let duplicateGroups = [];
     {
       let src;
       try {
@@ -215,9 +241,7 @@ router.post('/import', upload.single('file'), (req, res) => {
 
         for (const table of RESTORE_TABLES) {
           const cols = tableColumns(src, table);
-          // `schedules` postdates some backups; an older file without it is
-          // still restorable, it just has no schedules to bring.
-          if (cols.length === 0 && table !== 'schedules') {
+          if (cols.length === 0 && !OPTIONAL_TABLES.has(table)) {
             throw new Error(`missing table "${table}"`);
           }
           srcColumns[table] = cols;
@@ -240,9 +264,28 @@ router.post('/import', upload.single('file'), (req, res) => {
           .prepare('SELECT url FROM websites GROUP BY url HAVING COUNT(*) > 1 ORDER BY url LIMIT 5')
           .all()
           .map((r) => r.url);
+
+        // Group names are UNIQUE(owner_id, name) too, so the same collapse
+        // applies to them.
+        if (srcColumns.website_groups.length > 0) {
+          duplicateGroups = src
+            .prepare(
+              'SELECT name FROM website_groups GROUP BY name HAVING COUNT(*) > 1 ORDER BY name LIMIT 5'
+            )
+            .all()
+            .map((r) => r.name);
+        }
       } finally {
         if (src) src.close();
       }
+    }
+
+    if (duplicateGroups.length > 0) {
+      throw new Error(
+        'this backup holds groups with the same name under more than one ' +
+          'account, which cannot be merged into a single account: ' +
+          duplicateGroups.join(', ')
+      );
     }
 
     if (duplicateUrls.length > 0) {
@@ -292,6 +335,15 @@ router.post('/import', upload.single('file'), (req, res) => {
           }
         }
 
+        // Membership has no foreign key to `websites` (see migrations.js), so
+        // the check below cannot see a member whose website is not in the
+        // backup. Drop those rather than leave them waiting to reattach to
+        // whatever site later reuses the id.
+        db.exec(
+          `DELETE FROM website_group_members
+            WHERE website_id NOT IN (SELECT id FROM websites)`
+        );
+
         // Foreign keys were off for the copy, so nothing has checked them. Do it
         // now, inside the transaction, so a backup that does not hang together
         // rolls back instead of landing half-connected.
@@ -318,6 +370,8 @@ router.post('/import', upload.single('file'), (req, res) => {
       snapshots: counts.snapshots || 0,
       scan_results: counts.scan_results || 0,
       schedules: counts.schedules || 0,
+      groups: counts.website_groups || 0,
+      group_schedules: counts.group_schedules || 0,
     });
   } catch (err) {
     res.status(400).json({ error: `Invalid backup file: ${err.message}` });

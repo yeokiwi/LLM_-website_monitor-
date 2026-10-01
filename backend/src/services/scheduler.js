@@ -15,19 +15,36 @@
  *
  *   • No overlap. A tick that is still working blocks the next one, so a slow
  *     batch cannot pile up behind itself.
+ *
+ * Two kinds of schedule are run: a single website's, and a group's. A group run
+ * scans every active member and sends one digest to the group's recipients. A
+ * site is scanned at most once per tick however many due schedules include it,
+ * so a site in two groups — or in a group and on its own schedule — is paid for
+ * once and reported in each.
  */
 
 const cron = require('node-cron');
 
 const scheduleRepo = require('../repositories/scheduleRepo');
+const groupScheduleRepo = require('../repositories/groupScheduleRepo');
+const groupRepo = require('../repositories/groupRepo');
 const userRepo = require('../repositories/userRepo');
 const scanRepo = require('../repositories/scanRepo');
 const { runSingleScan } = require('./scanService');
 const mailer = require('./mailer');
 const emails = require('./emails');
+const notifications = require('./notifications');
 
-/** How many schedules one tick will process. Keeps a tick bounded. */
+/** How many website schedules one tick will process. Keeps a tick bounded. */
 const BATCH_SIZE = 25;
+
+/**
+ * How many group schedules one tick will process. Smaller, because each group
+ * is many scans; anything not claimed stays due and runs on a later tick.
+ */
+const GROUP_BATCH_SIZE = 5;
+
+const FREQUENCY_LABELS = { hourly: 'Every hour', daily: 'Every day', weekly: 'Every week' };
 
 /**
  * How long scan history is kept, in days. Unset means keep everything.
@@ -50,10 +67,12 @@ function isEnabled() {
 }
 
 /**
- * Run one due schedule.
+ * Run one due website schedule.
+ * @param {object} row          the claimed schedule joined to its website
+ * @param {Function} scanOnce   the tick's de-duplicating scan
  * @returns {Promise<string>} the status recorded against the schedule
  */
-async function runSchedule(row) {
+async function runSchedule(row, scanOnce) {
   const ownerId = row.owner_id;
 
   const website = {
@@ -66,7 +85,7 @@ async function runSchedule(row) {
     use_serper: row.use_serper,
   };
 
-  const result = await runSingleScan(website, row.period_days, 'schedule');
+  const result = await scanOnce(website, row.period_days, 'schedule');
 
   // `partial` also means changes were found — one engine just did not report.
   // Keying the alert off the status alone would drop those notifications.
@@ -78,8 +97,16 @@ async function runSchedule(row) {
 }
 
 async function notifyChangeDetected(ownerId, website, result) {
-  const user = userRepo.findById(ownerId);
-  if (!user || !result.scanId) return;
+  if (!result.scanId) return;
+
+  const { recipients } = notifications.recipientsFor({ ownerId });
+  if (recipients.length === 0) {
+    console.log(
+      `📧 Changes on ${website.url}, but there is nobody to tell — ` +
+        'add a default recipient on the Schedules page'
+    );
+    return;
+  }
 
   const message = emails.changeDetected({
     websiteName: website.name,
@@ -88,9 +115,113 @@ async function notifyChangeDetected(ownerId, website, result) {
     summary: result.llm_summary,
   });
 
-  // `mailer.send` logs instead of sending when SMTP is not configured, which is
-  // also how alerts are turned off: there is no per-account preference to read.
-  await mailer.send({ to: user.email, ...message });
+  // `mailer.send` logs instead of sending when SMTP is not configured, and never
+  // throws, so one bad address cannot stop the rest.
+  for (const to of recipients) {
+    await mailer.send({ to, ...message });
+  }
+}
+
+/**
+ * Run one due group schedule: scan every active member, record the outcome,
+ * and send one digest when the group asks for one.
+ *
+ * @returns {Promise<{ status: string, changed: number, failed: number }>}
+ */
+async function runGroupSchedule(row, scanOnce) {
+  const members = groupRepo.activeMembers(row.group_id);
+
+  if (members.length === 0) {
+    console.log(`⏱  Group "${row.group_name}" is scheduled but has no active websites`);
+    return { status: 'empty', changed: 0, failed: 0 };
+  }
+
+  const results = [];
+  for (const site of members) {
+    const result = await scanOnce(site, row.period_days, 'group_schedule');
+    results.push({
+      name: site.name,
+      url: site.url,
+      status: result.status,
+      changesFound: Boolean(result.changesFound),
+      scanId: result.scanId ?? null,
+      summary: result.llm_summary,
+      error: result.error_message || result.error || null,
+    });
+  }
+
+  const changed = results.filter((r) => r.changesFound).length;
+  const failed = results.filter((r) => r.status === 'error').length;
+
+  let status;
+  if (failed === results.length) status = 'error';
+  else if (failed > 0) status = 'partial';
+  else if (changed > 0) status = 'completed';
+  else status = 'no_changes';
+
+  // 'changes' means changes *or failures*: a scan that failed is something the
+  // recipients need to hear about, since it means the monitoring is not working.
+  const notify = row.notify_on === 'always' || changed > 0 || failed > 0;
+  if (notify) await notifyGroup(row, results);
+
+  return { status, changed, failed };
+}
+
+async function notifyGroup(row, results) {
+  const { recipients } = notifications.recipientsFor({
+    ownerId: row.owner_id,
+    groupEmails: groupRepo.parseList(row.notify_emails),
+  });
+
+  if (recipients.length === 0) {
+    console.log(
+      `📧 Group "${row.group_name}" finished, but there is nobody to tell — ` +
+        'add recipients to the group or a default on the Schedules page'
+    );
+    return;
+  }
+
+  const message = emails.groupScanDigest({
+    groupName: row.group_name,
+    scheduleLabel: FREQUENCY_LABELS[row.frequency],
+    results,
+  });
+
+  // One message per recipient: addresses are not shown to each other, and one
+  // rejected address does not stop delivery to the rest.
+  for (const to of recipients) {
+    await mailer.send({ to, ...message });
+  }
+}
+
+/**
+ * A scan function for one tick that runs each website at most once per period.
+ *
+ * Failures come back as an error result rather than a throw, so one broken
+ * site cannot stop a group run part-way through — and a failure is reported in
+ * every schedule that wanted that site, not just the first.
+ */
+function scanOncePerTick() {
+  const scans = new Map();
+
+  return (website, periodDays, triggeredBy) => {
+    const key = `${website.id}:${periodDays}`;
+    if (!scans.has(key)) {
+      scans.set(
+        key,
+        runSingleScan(website, periodDays, triggeredBy).catch((err) => {
+          console.error(`Scheduled scan failed for ${website.url}:`, err.message);
+          return {
+            scanId: null,
+            status: 'error',
+            changesFound: false,
+            error: err.message,
+          };
+        })
+      );
+    }
+    return scans.get(key);
+  };
 }
 
 /**
@@ -103,14 +234,19 @@ async function tick() {
 
   try {
     const due = scheduleRepo.claimDue(BATCH_SIZE);
-    if (due.length === 0) return { ran: 0 };
+    const dueGroups = groupScheduleRepo.claimDue(GROUP_BATCH_SIZE);
+    if (due.length === 0 && dueGroups.length === 0) return { ran: 0, groups: 0 };
 
-    console.log(`⏱  Running ${due.length} scheduled scan(s)`);
+    console.log(
+      `⏱  Running ${due.length} scheduled scan(s) and ${dueGroups.length} group run(s)`
+    );
+
+    const scanOnce = scanOncePerTick();
 
     for (const row of due) {
       let status;
       try {
-        status = await runSchedule(row);
+        status = await runSchedule(row, scanOnce);
       } catch (err) {
         console.error(`Scheduled scan failed for ${row.url}:`, err.message);
         status = 'error';
@@ -118,7 +254,18 @@ async function tick() {
       scheduleRepo.markRun(row.id, status);
     }
 
-    return { ran: due.length };
+    for (const row of dueGroups) {
+      let outcome;
+      try {
+        outcome = await runGroupSchedule(row, scanOnce);
+      } catch (err) {
+        console.error(`Scheduled group run failed for "${row.group_name}":`, err.message);
+        outcome = { status: 'error', changed: 0, failed: 0 };
+      }
+      groupScheduleRepo.markRun(row.id, outcome);
+    }
+
+    return { ran: due.length, groups: dueGroups.length };
   } finally {
     running = false;
   }
@@ -180,4 +327,12 @@ function stop() {
   }
 }
 
-module.exports = { start, stop, tick, pruneRetention, isEnabled, BATCH_SIZE };
+module.exports = {
+  start,
+  stop,
+  tick,
+  pruneRetention,
+  isEnabled,
+  BATCH_SIZE,
+  GROUP_BATCH_SIZE,
+};

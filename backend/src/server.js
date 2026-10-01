@@ -16,6 +16,8 @@ const websitesRouter = require('./routes/websites');
 const scansRouter = require('./routes/scans');
 const uploadRouter = require('./routes/upload');
 const databaseRouter = require('./routes/database');
+const groupsRouter = require('./routes/groups');
+const settingsRouter = require('./routes/settings');
 const authRouter = require('./routes/auth');
 const schedulesRouter = require('./routes/schedules');
 
@@ -86,6 +88,8 @@ app.use('/api/scans', requireAuth, apiLimiter, scansRouter);
 app.use('/api/schedules', requireAuth, apiLimiter, schedulesRouter);
 app.use('/api/upload', requireAuth, apiLimiter, uploadRouter);
 app.use('/api/database', requireAuth, apiLimiter, databaseRouter);
+app.use('/api/groups', requireAuth, apiLimiter, groupsRouter);
+app.use('/api/settings', requireAuth, apiLimiter, settingsRouter);
 
 // Website-specific scans shortcut
 app.use('/api/websites/:websiteId/scans', requireAuth, (req, res, next) => {

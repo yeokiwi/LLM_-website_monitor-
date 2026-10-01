@@ -330,6 +330,71 @@ function run(db) {
     CREATE INDEX IF NOT EXISTS idx_schedules_due
       ON schedules(is_enabled, next_run_at);
   `);
+
+  // -------------------------------------------------------------------------
+  // Website groups — a named, saved set of websites, scanned together by hand
+  // or on a schedule, with the people to tell when a scheduled run finishes.
+  //
+  // `website_group_members.website_id` has no foreign key, for the same reason
+  // `schedules.website_id` has none, and it matters more here: these tables are
+  // created before `backfillOwnership` runs on a legacy database, and that
+  // rebuild renames `websites` to `websites_legacy` and then drops it. SQLite
+  // repoints foreign keys on a rename, so a membership FK would be left
+  // referencing a dropped table. Rows are removed explicitly when a website is,
+  // and every read filters `websites.is_active`.
+  //
+  // `notify_emails` is a JSON array of addresses; `notify_on` is 'always' or
+  // 'changes' (changes or failures).
+  // -------------------------------------------------------------------------
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS website_groups (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      owner_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name          TEXT NOT NULL,
+      notify_emails TEXT NOT NULL DEFAULT '[]',
+      notify_on     TEXT NOT NULL DEFAULT 'changes',
+      created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(owner_id, name)
+    );
+
+    CREATE TABLE IF NOT EXISTS website_group_members (
+      group_id   INTEGER NOT NULL REFERENCES website_groups(id) ON DELETE CASCADE,
+      website_id INTEGER NOT NULL,
+      PRIMARY KEY (group_id, website_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_group_members_website
+      ON website_group_members(website_id);
+
+    CREATE TABLE IF NOT EXISTS group_schedules (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id     INTEGER NOT NULL UNIQUE REFERENCES website_groups(id) ON DELETE CASCADE,
+      owner_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      frequency    TEXT NOT NULL,
+      period_days  INTEGER NOT NULL DEFAULT 30,
+      is_enabled   INTEGER NOT NULL DEFAULT 1,
+      next_run_at  DATETIME NOT NULL,
+      last_run_at  DATETIME,
+      last_status  TEXT,
+      last_changed INTEGER,
+      last_failed  INTEGER,
+      created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_group_schedules_due
+      ON group_schedules(is_enabled, next_run_at);
+  `);
+
+  // -------------------------------------------------------------------------
+  // Instance settings — key/value, for the handful of things configured in the
+  // app rather than the environment (the default notification recipients).
+  // -------------------------------------------------------------------------
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT
+    );
+  `);
 }
 
 /**

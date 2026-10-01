@@ -344,3 +344,144 @@ describe('POST /api/database/import — rejections', () => {
     liveDataIntact();
   });
 });
+
+describe('POST /api/database/import — website groups', () => {
+  let ctx;
+
+  /** A group with members, recipients and a schedule, built in SQL. */
+  function addGroup(db, owner, name, websiteIds, emails = ['team@example.com']) {
+    const id = db
+      .prepare(
+        `INSERT INTO website_groups (owner_id, name, notify_emails, notify_on)
+         VALUES (?, ?, ?, 'always')`
+      )
+      .run(owner, name, JSON.stringify(emails)).lastInsertRowid;
+    for (const websiteId of websiteIds) {
+      db.prepare('INSERT INTO website_group_members (group_id, website_id) VALUES (?, ?)')
+        .run(id, websiteId);
+    }
+    db.prepare(
+      `INSERT INTO group_schedules (group_id, owner_id, frequency, period_days, next_run_at)
+       VALUES (?, ?, 'weekly', 14, '2030-01-01T00:00:00.000Z')`
+    ).run(id, owner);
+    return id;
+  }
+
+  beforeAll(async () => {
+    ctx = await harness();
+  });
+
+  afterAll(() => ctx.cleanup());
+
+  it('round-trips groups, their members and their schedules', async () => {
+    const a = addWebsite(ctx.db, ctx.owner, 'https://example.com/g-a', 'A');
+    const b = addWebsite(ctx.db, ctx.owner, 'https://example.com/g-b', 'B');
+    addGroup(ctx.db, ctx.owner, 'Statutes', [a, b]);
+
+    const backup = await exportBackup(ctx, ctx.session.token);
+    ctx.db.prepare('DELETE FROM website_groups').run();
+
+    const res = await importBackup(ctx, ctx.session.token, backup);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ groups: 1, group_schedules: 1 });
+
+    const listed = await as(request(ctx.app).get('/api/groups'), ctx.session.token);
+    const group = listed.body.groups.find((g) => g.name === 'Statutes');
+    expect(group.website_ids.sort()).toEqual([a, b].sort());
+    expect(group.notify_emails).toEqual(['team@example.com']);
+    expect(group.schedule).toMatchObject({ frequency: 'weekly', period_days: 14 });
+  });
+
+  it('re-owns groups taken under another account', async () => {
+    const stranger = ctx.db
+      .prepare(`INSERT INTO users (email, password_hash) VALUES ('g@example.com', 'x')`)
+      .run().lastInsertRowid;
+    const site = addWebsite(ctx.db, stranger, 'https://example.com/g-theirs', 'Theirs');
+    ctx.db.prepare('DELETE FROM website_groups').run();
+    addGroup(ctx.db, stranger, 'Their group', [site]);
+
+    const backup = await exportBackup(ctx, ctx.session.token);
+    const res = await importBackup(ctx, ctx.session.token, backup);
+    expect(res.status).toBe(200);
+
+    for (const table of ['website_groups', 'group_schedules']) {
+      const owners = ctx.db.prepare(`SELECT DISTINCT owner_id FROM ${table}`).all();
+      expect(owners.map((r) => r.owner_id)).toEqual([ctx.owner]);
+    }
+  });
+
+  it('still restores a backup taken before groups existed', async () => {
+    // Without the optional-table exemption, adding these tables would have made
+    // every earlier backup unrestorable.
+    addWebsite(ctx.db, ctx.owner, 'https://example.com/pre-groups', 'Pre');
+    const backup = await exportBackup(ctx, ctx.session.token);
+
+    // Make it look like a backup from before this feature: no group tables.
+    const file = path.join(os.tmpdir(), `wm-old-${crypto.randomBytes(6).toString('hex')}.db`);
+    fs.writeFileSync(file, backup);
+    const conn = new Database(file);
+    conn.exec(`
+      DROP TABLE group_schedules;
+      DROP TABLE website_group_members;
+      DROP TABLE website_groups;
+    `);
+    conn.close();
+    const preGroups = fs.readFileSync(file);
+    fs.rmSync(file, { force: true });
+
+    const res = await importBackup(ctx, ctx.session.token, preGroups);
+
+    expect(res.status).toBe(200);
+    expect(res.body.groups).toBe(0);
+    expect(count(ctx.db, 'website_groups')).toBe(0);
+  });
+
+  it('drops memberships whose website is not in the backup', async () => {
+    const site = addWebsite(ctx.db, ctx.owner, 'https://example.com/g-orphan', 'Orphan');
+    const group = addGroup(ctx.db, ctx.owner, 'Orphaned', [site]);
+    // A membership for a website id the backup does not contain.
+    ctx.db.prepare('INSERT INTO website_group_members (group_id, website_id) VALUES (?, 987654)')
+      .run(group);
+
+    const backup = await exportBackup(ctx, ctx.session.token);
+    const res = await importBackup(ctx, ctx.session.token, backup);
+
+    expect(res.status).toBe(200);
+    const orphans = ctx.db
+      .prepare('SELECT COUNT(*) AS n FROM website_group_members WHERE website_id = 987654')
+      .get();
+    expect(orphans.n).toBe(0);
+  });
+
+  it('refuses a backup with the same group name under two accounts', async () => {
+    const other = ctx.db
+      .prepare(`INSERT INTO users (email, password_hash) VALUES ('h@example.com', 'x')`)
+      .run().lastInsertRowid;
+    ctx.db.prepare('DELETE FROM website_groups').run();
+    addGroup(ctx.db, ctx.owner, 'Clash', []);
+    addGroup(ctx.db, other, 'Clash', []);
+
+    const backup = await exportBackup(ctx, ctx.session.token);
+    ctx.db.prepare('DELETE FROM website_groups WHERE owner_id = ?').run(other);
+
+    const res = await importBackup(ctx, ctx.session.token, backup);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('Clash');
+    // Live data untouched: the local group is still there, alone.
+    expect(ctx.db.prepare('SELECT name FROM website_groups').all()).toEqual([{ name: 'Clash' }]);
+  });
+
+  it('keeps this instance’s notification settings rather than the backup’s', async () => {
+    const notifications = require('../src/services/notifications');
+    notifications.setDefaultEmails(['theirs@example.com']);
+    const backup = await exportBackup(ctx, ctx.session.token);
+    notifications.setDefaultEmails(['ours@example.com']);
+
+    const res = await importBackup(ctx, ctx.session.token, backup);
+
+    expect(res.status).toBe(200);
+    expect(notifications.defaultEmails()).toEqual(['ours@example.com']);
+  });
+});

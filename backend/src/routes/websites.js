@@ -13,6 +13,7 @@ const XLSX = require('xlsx');
 const websiteRepo = require('../repositories/websiteRepo');
 const scanRepo = require('../repositories/scanRepo');
 const scheduleRepo = require('../repositories/scheduleRepo');
+const groupRepo = require('../repositories/groupRepo');
 
 const router = express.Router();
 
@@ -135,6 +136,7 @@ router.delete('/:id', (req, res) => {
   }
 
   scheduleRepo.removeForWebsite(req.params.id);
+  groupRepo.removeWebsites(req.user.userId, [Number(req.params.id)]);
   res.json({ message: 'Website removed' });
 });
 
@@ -149,6 +151,7 @@ router.post('/bulk-delete', (req, res) => {
 
   const removed = websiteRepo.deactivateMany(req.user.userId, ids);
   for (const id of ids) scheduleRepo.removeForWebsite(id);
+  groupRepo.removeWebsites(req.user.userId, ids);
 
   res.json({ message: `Removed ${removed} website(s)`, removed });
 });

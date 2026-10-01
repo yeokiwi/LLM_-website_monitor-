@@ -253,6 +253,43 @@ describe('ownership migration', () => {
     expect(scans.body.results[0].llm_summary).toContain('Report for legacy site');
   });
 
+  it('leaves group membership pointing at no dropped table', () => {
+    // The group tables are created before this rebuild runs, and the rebuild
+    // renames `websites` to `websites_legacy` and drops it. SQLite repoints a
+    // foreign key on rename, so a membership FK to `websites` would be left
+    // referencing a table that no longer exists — every insert would then fail
+    // with "no such table". Membership deliberately has no such key.
+    const { sql } = db
+      .prepare("SELECT sql FROM sqlite_master WHERE name = 'website_group_members'")
+      .get();
+
+    expect(sql).not.toMatch(/websites_legacy/);
+
+    // Scoped to the group tables. `snapshots` and `scan_results` do come out of
+    // this rebuild pointing at `websites_legacy` — the same trap, predating the
+    // group tables — which is a separate, known issue rather than this one.
+    const groupViolations = db
+      .pragma('foreign_key_check')
+      .filter((v) => ['website_groups', 'website_group_members', 'group_schedules'].includes(v.table));
+    expect(groupViolations).toEqual([]);
+  });
+
+  it('can group the inherited websites', async () => {
+    const session = await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'test-admin-password' });
+    const ids = db
+      .prepare('SELECT id FROM websites WHERE is_active = 1 ORDER BY id LIMIT 3')
+      .all()
+      .map((r) => r.id);
+
+    const res = await as(request(app).post('/api/groups'), session.body.token)
+      .send({ name: 'Inherited', websiteIds: ids });
+
+    expect(res.status).toBe(201);
+    expect(res.body.website_ids.sort()).toEqual([...ids].sort());
+  });
+
 });
 
 describe('fresh database', () => {
@@ -294,6 +331,17 @@ describe('fresh database', () => {
   it('records the ownership migration as already applied', () => {
     const { migrations } = require('../src/db');
     expect(migrations.hasRun(db, migrations.OWNERSHIP_MIGRATION)).toBe(true);
+  });
+
+  it('creates the group and settings tables', () => {
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all()
+      .map((r) => r.name);
+
+    for (const table of ['website_groups', 'website_group_members', 'group_schedules', 'app_settings']) {
+      expect(tables).toContain(table);
+    }
   });
 
   it('does not write a backup file when there was nothing to migrate', () => {
