@@ -90,8 +90,8 @@ export default function BackupPage() {
       <section className={s.card}>
         <h2 className={s.cardTitle}>Download a backup</h2>
         <p className={s.cardLead}>
-          The full backup is a SQLite file holding every website, snapshot, scan
-          and schedule. It carries no sign-in credentials — those live in the
+          The full backup is a SQLite file holding every website, group, snapshot,
+          scan and schedule. It carries no sign-in credentials — those live in the
           server&apos;s environment, not the database — so it is safe to store
           alongside your other backups and restores onto any instance.
         </p>
@@ -208,7 +208,8 @@ export default function BackupPage() {
             <p className={s.successTitle}>Database restored</p>
             <ul className={s.counts}>
               <li>{result.websites} website(s)</li>
-              <li>{result.schedules} schedule(s)</li>
+              <li>{result.groups ?? 0} group(s), {result.group_schedules ?? 0} with a schedule</li>
+              <li>{result.schedules} single-website schedule(s)</li>
               <li>{result.scan_results} scan(s)</li>
               <li>{result.snapshots} snapshot(s)</li>
             </ul>

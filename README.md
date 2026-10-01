@@ -35,6 +35,7 @@ One shared username and password, set in the server's environment, protect one s
   - [Adding websites](#adding-websites)
   - [Importing websites from Excel](#importing-websites-from-excel)
   - [Running a scan](#running-a-scan)
+  - [Website groups](#website-groups)
   - [Viewing history](#viewing-history)
   - [Backing up and restoring](#backing-up-and-restoring)
 - [Excel / CSV Import Format](#excel--csv-import-format)
@@ -62,7 +63,9 @@ It runs as a single-team tool: one shared username and password, set in the serv
 - **Intelligent scan statuses** — skips LLM calls when content is unchanged; handles first-time scans gracefully
 - **Scan history page** — paginated log of all past scans with expandable LLM summaries
 - **One shared login** — a username and password from the environment, with no accounts to manage, no signup and nothing to reset
-- **Scheduled scans** — hourly, daily or weekly background scans with an email when something changes
+- **Website groups** — save a named set of websites and scan it in one go, by hand or on a schedule
+- **Scheduled scans** — hourly, daily or weekly background scans of a group or a single website
+- **Email notifications** — one digest per scheduled group run to that group's recipients, on every run or only when something changed or failed
 - **Per-scan cost record** — LLM token counts and duration are stored on every scan row, so API spend can be totalled from the database
 - **PDF report export** — export every structured report on the scan history page to a single PDF file
 - **Backup and restore** — download the whole database as one file and restore it onto any instance, from the Backup page
@@ -144,20 +147,24 @@ Providers can also refuse a query outright (HTTP 400 — free Serper accounts re
 │       ├── repositories/       ← all owner-scoped SQL lives here; the single
 │       │   │                     place a Postgres move would land
 │       │   ├── userRepo.js         websiteRepo.js    scanRepo.js
-│       │   └── scheduleRepo.js
+│       │   ├── scheduleRepo.js     groupRepo.js      groupScheduleRepo.js
+│       │   └── settingsRepo.js
 │       ├── routes/
 │       │   ├── auth.js         ← the shared login
 │       │   ├── websites.js     ← CRUD for monitored sites
 │       │   ├── scans.js        ← scan results and triggering
 │       │   ├── schedules.js    ← automatic scan cadences
 │       │   ├── upload.js       ← Excel / CSV upload endpoint
+│       │   ├── groups.js       ← website groups and their schedules
+│       │   ├── settings.js     ← default recipients, test email
 │       │   └── database.js     ← backup and restore
 │       └── services/
 │           ├── scanService.js      ← scan orchestration
 │           ├── scheduler.js        ← background scans and retention pruning
 │           ├── accountService.js   ← hashing, JWT, account seed
 │           ├── mailer.js           ← SMTP (logs when unconfigured)
-│           ├── emails.js           ← the change-alert template
+│           ├── emails.js           ← change alert, group digest, test message
+│           ├── notifications.js    ← who receives scheduled-scan email
 │           ├── scraper.js      ← Firecrawl / Brave / Serper / axios+cheerio
 │           ├── snapshotService.js  ← save / retrieve snapshots
 │           ├── diffService.js      ← compute line diff
@@ -178,10 +185,12 @@ Providers can also refuse a query outright (HTTP 400 — free Serper accounts re
         ├── components/
         │   ├── AddWebsiteForm.jsx   ExcelUpload.jsx    PeriodSelector.jsx
         │   ├── WebsiteList.jsx      ScanResultCard.jsx DataBackup.jsx
+        │   ├── GroupPicker.jsx      ← pick or save a group on the dashboard
         │   └── ErrorBoundary.jsx    ← render errors show a message, not a blank page
         └── pages/
             ├── Dashboard.jsx        History.jsx        ReportPage.jsx
             ├── LoginPage.jsx        SchedulesPage.jsx
+            ├── GroupsPage.jsx   ← create and edit groups and their recipients
             ├── BackupPage.jsx   ← download a backup, restore from one
             └── HelpPage.jsx
 ```
@@ -504,9 +513,16 @@ default in production and off elsewhere so `npm run dev` does not spend API
 credit. There is no queue or worker process: the deployment is a single
 container, and a broker would be infrastructure without a problem to solve.
 
-Due schedules are claimed by advancing `next_run_at` inside the same transaction
-that reads them, so a restart mid-scan **skips** the run rather than repeating
-it. A scan costs real money; running one twice is worse than missing one.
+Two kinds of schedule run on that tick: a single website's, and a **group's**,
+which scans every active website in the group. Both are claimed by advancing
+`next_run_at` inside the same transaction that reads them, so a restart mid-scan
+**skips** the run rather than repeating it. A scan costs real money; running one
+twice is worse than missing one.
+
+A website is scanned at most **once per tick** for a given period, however many
+due schedules include it — a site in two groups, or in a group and on its own
+schedule, is paid for once and reported in each. Up to 25 website schedules and
+5 group runs are claimed per tick; anything left over stays due for the next.
 
 Every scan costs real money in LLM and scraper API calls, so pick the slowest
 cadence that still catches what you need. The token counts and duration of each
@@ -522,10 +538,33 @@ growing without bound.
 
 Any SMTP provider works (Resend, SendGrid, SES, Postmark, Mailgun). **When
 `SMTP_HOST` is unset, messages are logged instead of sent** — scanning keeps
-working, it just does not deliver mail. That is also how you turn alerts off.
+working, it just does not deliver mail. The Schedules page warns when this is the
+case.
 
-One message is sent: *changes detected* after a scheduled scan, carrying the
-summary and a link to the full report.
+**Who receives it.** Recipients resolve in this order:
+
+1. the group's own recipient list (set on the Groups page);
+2. the **default recipients** (set at the top of the Schedules page);
+3. the sign-in account's address — only if it is a real one.
+
+With the shared login the account address is `<AUTH_USERNAME>@local` unless
+`AUTH_USERNAME` is itself an email address, and that placeholder is never
+mailed. **Before this, every alert went to it** — so if you had SMTP configured
+and never saw an alert, that is why. Set a default list.
+
+Each recipient gets their own copy, so addresses are not shown to each other.
+Use **Send test email** on the Schedules page to confirm delivery end to end.
+
+**What is sent.**
+
+- A scheduled **group** run sends one digest — never one email per site — whose
+  subject carries the outcome (`Statutes: 2 changed, 1 failed of 14 sites`) and
+  whose body lists every site with its status and a link to its report, changed
+  and failed sites first. Each group chooses *after every run* or *only when
+  something changed or a scan failed*; a failure counts because it means the
+  monitoring is not working.
+- A **single website's** schedule sends *changes detected* when it changes.
+- Scans you start yourself send nothing — the results are on screen.
 
 ---
 
@@ -552,7 +591,7 @@ change is picked up on first boot and needs no migration:
 
 ```bash
 cd backend
-npm test          # vitest, ~110 tests
+npm test          # vitest, ~200 tests
 npm run test:watch
 ```
 
@@ -565,6 +604,9 @@ the things that would be expensive to get wrong:
 | `tests/access.test.js` | Owner-scoped reads, and that no protected route answers without a token |
 | `tests/migration.test.js` | The ownership rebuild against a realistic legacy database |
 | `tests/scheduler.test.js` | Claiming due work exactly once, and the schedule lifecycle |
+| `tests/groupScheduler.test.js` | Real ticks: group runs, one scan per site per tick, digests and who receives them |
+| `tests/groups.test.js` | Group and notification-settings API, and membership following website removal |
+| `tests/database.test.js` | Backup and restore round-trips, re-owning, and older backups still restoring |
 | `tests/snapshotService.test.js` | Baseline selection and full-content storage |
 | `tests/scraper.test.js` | Search normalisation, page scoping, and failures that throw rather than being snapshotted |
 | `tests/scanService.test.js` | Engine resolution and row-level status aggregation |
@@ -613,6 +655,21 @@ See [Excel / CSV Import Format](#excel--csv-import-format) for the expected file
 3. Click **Scan Selected**.
 4. Results appear below the table as expandable cards, one per website.
 
+### Website groups
+
+A group is a named, saved set of websites — say, every statute page one team owns.
+
+- **Create one** by ticking websites on the Dashboard and choosing **Save
+  selection as group**, or with **New group** on the **Groups** page.
+- **Scan it by hand**: pick it from the **Group** menu on the Dashboard (its
+  websites are selected) and click **Scan Selected**, or click **Scan now** on
+  the Groups page.
+- **Scan it on a schedule**: give it a cadence and a monitoring period on the
+  **Schedules** page, and set who is emailed on the Groups page.
+
+A website can belong to any number of groups. Deleting a group never deletes its
+websites or their history; removing a website takes it out of every group.
+
 ### Viewing history
 
 Click **Scan History** in the navigation bar to see a paginated log of every scan that has ever been run, with statuses and LLM summaries.
@@ -624,7 +681,7 @@ Use **Export reports (PDF)** in the top-right of the page to download all of the
 Click **Backup** in the navigation bar.
 
 **Download full backup (.db)** gives you a SQLite file holding every website,
-snapshot, scan and schedule. It is what you restore from, and it is also just a
+group, snapshot, scan and schedule. It is what you restore from, and it is also just a
 database — open it in any SQLite tool and read it.
 
 It carries **no sign-in credentials**. The username and password come from
@@ -635,7 +692,7 @@ out regardless, along with the rows left behind by the removed billing tables.
 **Download my data (.json)** is the readable alternative — websites and scan
 reports as JSON, for reading somewhere else. It is not restorable.
 
-**Restore** replaces everything. Every website, snapshot, scan and schedule on
+**Restore** replaces everything. Every website, group, snapshot, scan and schedule on
 the instance is dropped and reloaded from the backup, so anything added since the
 backup was taken is lost. The page asks you to type `replace all data` before the
 button does anything, because the only way back is the `<DB_PATH>.bak-<timestamp>`
@@ -651,6 +708,11 @@ One thing a backup will not do is merge. If the file holds the same URL under tw
 different accounts, those cannot collapse onto one account — websites are unique
 per owner and URL — so the restore is refused and names the URLs rather than
 quietly dropping rows.
+
+The **default recipients** set on the Schedules page are this instance's
+configuration and are kept as they are: restoring someone else's backup should
+not redirect your alerts to their recipients. Groups' own recipient lists do come
+across with the groups.
 
 ---
 
@@ -739,6 +801,28 @@ Status codes worth handling: **401** not signed in · **404** not found.
 | `GET` | `/api/schedules` | — | Current schedules and the available cadences |
 | `PUT` | `/api/schedules/:websiteId` | `{ frequency, periodDays?, isEnabled? }` | Create or update a schedule |
 | `DELETE` | `/api/schedules/:websiteId` | — | Stop scanning automatically |
+
+### Groups
+
+| Method | Path | Body / Params | Description |
+|---|---|---|---|
+| `GET` | `/api/groups` | — | Groups with their active member ids, recipients and schedule, plus the available cadences |
+| `POST` | `/api/groups` | `{ name, websiteIds, notifyEmails?, notifyOn? }` | Create a group. Unknown website ids are a 400 naming them |
+| `PATCH` | `/api/groups/:id` | any of the above | Change only the fields given |
+| `DELETE` | `/api/groups/:id` | — | Delete the grouping; websites and history stay |
+| `PUT` | `/api/groups/:id/schedule` | `{ frequency, periodDays?, isEnabled? }` | Create or update the group's schedule |
+| `DELETE` | `/api/groups/:id/schedule` | — | Stop scanning the group automatically |
+
+`notifyEmails` takes an array or text separated by commas, semicolons or newlines.
+`notifyOn` is `changes` (changes or failures; the default) or `always`.
+
+### Settings
+
+| Method | Path | Body | Description |
+|---|---|---|---|
+| `GET` | `/api/settings/notifications` | — | `{ defaultEmails, smtpConfigured, accountEmail, accountEmailUsable }` |
+| `PUT` | `/api/settings/notifications` | `{ defaultEmails }` | Set the default recipients |
+| `POST` | `/api/settings/notifications/test` | `{ emails? }` | Send a test message to the default list (or `emails`) and report per address whether SMTP accepted it |
 
 ### Data
 

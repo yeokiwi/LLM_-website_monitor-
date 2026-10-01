@@ -13,6 +13,7 @@ const TOC = [
   { id: 'scan-results',   label: 'Understanding Results' },
   { id: 'reports',        label: 'Change Reports' },
   { id: 'history',        label: 'Scan History' },
+  { id: 'groups',         label: 'Website Groups' },
   { id: 'schedules',      label: 'Automatic Scans' },
   { id: 'backup',         label: 'Backup & Restore' },
   { id: 'configuration',  label: 'Configuration' },
@@ -169,7 +170,7 @@ export default function HelpPage() {
             <div className={s.featureCard}>
               <span className={s.featureIcon}>⏱️</span>
               <strong>Automatic scans</strong>
-              <p>Sites can be checked hourly, daily or weekly, with an email when something changes.</p>
+              <p>Single sites or whole groups can be checked hourly, daily or weekly, with an email to the people who need it.</p>
             </div>
           </div>
         </Section>
@@ -447,12 +448,47 @@ export default function HelpPage() {
         <hr className={s.divider} />
 
         {/* ── 8. Automatic Scans ──────────────────────────────────────────── */}
+        <Section id="groups" icon="🗂️" title="Website Groups">
+          <p className={s.p}>
+            A group is a named, saved set of websites — say, every statute page your
+            team owns. Instead of ticking the same twenty boxes before every scan,
+            pick the group.
+          </p>
+
+          <Step n={1} title="Create a group">
+            Tick the websites on the <Link to="/" className={s.link}>Dashboard</Link>,
+            then choose <strong>Save selection as group</strong> and give it a name. Or
+            use <strong>New group</strong> on the{' '}
+            <Link to="/groups" className={s.link}>Groups</Link> page and pick the
+            websites from a filterable list.
+          </Step>
+          <Step n={2} title="Scan it by hand">
+            On the Dashboard, choose the group from the <strong>Group</strong> menu —
+            its websites are selected — and click <strong>Scan Selected</strong>. Or
+            click <strong>Scan now</strong> on the Groups page.
+          </Step>
+          <Step n={3} title="Or scan it on a schedule">
+            Give the group a cadence on the{' '}
+            <Link to="/schedules" className={s.link}>Schedules</Link> page, and say on
+            the Groups page who should be emailed.
+          </Step>
+
+          <p className={s.p}>
+            A website can be in any number of groups. Deleting a group never deletes
+            its websites or their history, and removing a website takes it out of
+            every group it was in.
+          </p>
+        </Section>
+
+        <hr className={s.divider} />
+
+        {/* ── Automatic scans ─────────────────────────────────────────────── */}
         <Section id="schedules" icon="⏱️" title="Automatic Scans">
           <p className={s.p}>
-            A site can be checked on a schedule instead of you clicking{' '}
-            <strong>Scan Selected</strong> yourself. Open the{' '}
+            A group, or a single website, can be checked on a schedule instead of you
+            clicking <strong>Scan Selected</strong> yourself. Open the{' '}
             <Link to="/schedules" className={s.link}>Schedules</Link> page and pick a
-            cadence for each website.
+            cadence.
           </p>
 
           <div className={s.envTable}>
@@ -463,14 +499,32 @@ export default function HelpPage() {
           </div>
 
           <p className={s.p}>
-            When a scheduled scan finds something, an email goes out with the summary
-            and a link to the full report — provided SMTP is configured on the server.
-            Without it, the message is written to the server log instead.
+            <strong>Who is emailed.</strong> A group emails its own recipients. A group
+            with none, and every single-website schedule, uses the{' '}
+            <strong>default recipients</strong> set at the top of the Schedules page.
+            Use <strong>Send test email</strong> there to check that messages arrive.
           </p>
+
+          <p className={s.p}>
+            <strong>What is sent.</strong> A scheduled group run sends one digest per
+            run — never one email per website — listing every site with its result
+            and a link to each report, changed and failed sites first. Each group
+            chooses whether to email after every run or only when something changed
+            or a scan failed. A single website's schedule emails when it changes.
+          </p>
+
+          <Callout type="warning">
+            Email needs SMTP configured on the server. Without it, schedules still
+            run, but each message is written to the server log instead — the
+            Schedules page says so when this is the case.
+          </Callout>
 
           <Callout type="info">
             Every scan costs real money in LLM and scraper API calls, so pick the
-            slowest cadence that still catches what you need.
+            slowest cadence that still catches what you need. A website in a
+            scheduled group <em>and</em> on its own schedule is scanned by both; the
+            Schedules page flags this. Websites shared by groups that are due at the
+            same moment are scanned once and reported in each.
           </Callout>
 
           <Callout type="tip">

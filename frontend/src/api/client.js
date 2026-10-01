@@ -84,6 +84,37 @@ export const setSchedule = (websiteId, { frequency, periodDays, isEnabled }) =>
 export const removeSchedule = (websiteId) =>
   api.delete(`/schedules/${websiteId}`).then((r) => r.data);
 
+// ── Groups ────────────────────────────────────────────────────────────────────
+/** `{ groups, allowedFrequencies }` */
+export const getGroups = () => api.get('/groups').then((r) => r.data);
+
+export const createGroup = ({ name, websiteIds, notifyEmails, notifyOn }) =>
+  api.post('/groups', { name, websiteIds, notifyEmails, notifyOn }).then((r) => r.data);
+
+/** Only the fields passed are changed. */
+export const updateGroup = (id, fields) =>
+  api.patch(`/groups/${id}`, fields).then((r) => r.data);
+
+export const deleteGroup = (id) => api.delete(`/groups/${id}`).then((r) => r.data);
+
+export const setGroupSchedule = (id, { frequency, periodDays, isEnabled }) =>
+  api.put(`/groups/${id}/schedule`, { frequency, periodDays, isEnabled }).then((r) => r.data);
+
+export const removeGroupSchedule = (id) =>
+  api.delete(`/groups/${id}/schedule`).then((r) => r.data);
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+/** `{ defaultEmails, smtpConfigured, accountEmail, accountEmailUsable }` */
+export const getNotificationSettings = () =>
+  api.get('/settings/notifications').then((r) => r.data);
+
+export const saveNotificationSettings = (defaultEmails) =>
+  api.put('/settings/notifications', { defaultEmails }).then((r) => r.data);
+
+/** Sends to the default list, or `emails` when given. `{ results, allSent }` */
+export const sendTestEmail = (emails) =>
+  api.post('/settings/notifications/test', emails ? { emails } : {}).then((r) => r.data);
+
 // ── Upload ────────────────────────────────────────────────────────────────────
 export const uploadExcel = (file) => {
   const form = new FormData();

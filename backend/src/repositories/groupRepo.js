@@ -212,29 +212,6 @@ function removeWebsites(ownerId, websiteIds) {
     .run(...websiteIds, ownerId).changes;
 }
 
-/**
- * For each active website, the names of scheduled groups that include it.
- * Lets the Schedules page flag a site that is also scanned through a group.
- */
-function scheduledGroupNamesByWebsite(ownerId) {
-  const rows = db
-    .prepare(
-      `SELECT m.website_id, g.name
-         FROM website_group_members m
-         JOIN website_groups g   ON g.id = m.group_id
-         JOIN group_schedules gs ON gs.group_id = g.id
-        WHERE g.owner_id = ? AND gs.is_enabled = 1
-        ORDER BY g.name COLLATE NOCASE`
-    )
-    .all(ownerId);
-
-  const byWebsite = {};
-  for (const row of rows) {
-    (byWebsite[row.website_id] ||= []).push(row.name);
-  }
-  return byWebsite;
-}
-
 module.exports = {
   listForOwner,
   findById,
@@ -244,6 +221,5 @@ module.exports = {
   update,
   remove,
   removeWebsites,
-  scheduledGroupNamesByWebsite,
   parseList,
 };

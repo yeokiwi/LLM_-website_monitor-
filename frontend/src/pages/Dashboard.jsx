@@ -1,11 +1,20 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import AddWebsiteForm from '../components/AddWebsiteForm';
 import ExcelUpload from '../components/ExcelUpload';
 import WebsiteList from '../components/WebsiteList';
 import PeriodSelector from '../components/PeriodSelector';
 import ScanResultCard from '../components/ScanResultCard';
 import DataBackup from '../components/DataBackup';
-import { getWebsites, deleteWebsite, bulkDeleteWebsites, updateWebsite, bulkUpdateWebsites } from '../api/client';
+import GroupPicker from '../components/GroupPicker';
+import {
+  getWebsites,
+  deleteWebsite,
+  bulkDeleteWebsites,
+  updateWebsite,
+  bulkUpdateWebsites,
+  getGroups,
+} from '../api/client';
 import { useScan } from '../context/ScanContext';
 import s from './Dashboard.module.css';
 
@@ -14,6 +23,9 @@ export default function Dashboard() {
   const [selected, setSelected] = useState([]);
   const [period, setPeriod]     = useState(30);
   const [loadError, setLoadError] = useState('');
+  const [groups, setGroups]     = useState([]);
+  const location = useLocation();
+  const navigate = useNavigate();
 
   // Scan state lives in ScanContext so it survives navigation away and back
   const { scanning, progress, scanResults, error: scanError, startScan } = useScan();
@@ -27,11 +39,38 @@ export default function Dashboard() {
     }
   }, []);
 
+  const loadGroups = useCallback(async () => {
+    try {
+      const data = await getGroups();
+      setGroups(data.groups);
+      return data.groups;
+    } catch {
+      // The picker simply shows no groups; the rest of the dashboard still works.
+      return [];
+    }
+  }, []);
+
   // Re-fetch the list on mount (picks up fresh snapshot counts after returning
   // from another page mid-scan or after a scan that finished while away)
   useEffect(() => {
     loadWebsites();
   }, [loadWebsites]);
+
+  // "Scan now" on the Groups page navigates here with the group to select.
+  // The state is cleared once applied, so a reload does not re-select it.
+  const pendingGroupId = location.state?.groupId;
+  useEffect(() => {
+    let cancelled = false;
+    loadGroups().then((loaded) => {
+      if (cancelled || !pendingGroupId) return;
+      const group = loaded.find((g) => g.id === pendingGroupId);
+      if (group) setSelected(group.website_ids);
+      navigate(location.pathname, { replace: true, state: null });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadGroups, pendingGroupId, navigate, location.pathname]);
 
   function handleToggle(id) {
     setSelected((prev) =>
@@ -75,6 +114,7 @@ export default function Dashboard() {
     await deleteWebsite(id);
     setSelected((prev) => prev.filter((x) => x !== id));
     loadWebsites();
+    loadGroups(); // the site has left its groups too
   }
 
   async function handleDeleteSelected() {
@@ -87,6 +127,7 @@ export default function Dashboard() {
       await bulkDeleteWebsites(selected);
       setSelected([]);
       loadWebsites();
+      loadGroups();
     } catch (err) {
       setLoadError(err.response?.data?.error || 'Failed to remove selected websites');
     }
@@ -141,6 +182,14 @@ export default function Dashboard() {
             </button>
           </div>
         </div>
+
+        <GroupPicker
+          groups={groups}
+          selected={selected}
+          disabled={scanning}
+          onSelect={setSelected}
+          onSaved={() => loadGroups()}
+        />
 
         {/* Per-site progress bar */}
         {progress && (
