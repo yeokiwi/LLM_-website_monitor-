@@ -264,14 +264,73 @@ describe('ownership migration', () => {
       .get();
 
     expect(sql).not.toMatch(/websites_legacy/);
+    expect(db.pragma('foreign_key_check')).toEqual([]);
+  });
 
-    // Scoped to the group tables. `snapshots` and `scan_results` do come out of
-    // this rebuild pointing at `websites_legacy` — the same trap, predating the
-    // group tables — which is a separate, known issue rather than this one.
-    const groupViolations = db
-      .pragma('foreign_key_check')
-      .filter((v) => ['website_groups', 'website_group_members', 'group_schedules'].includes(v.table));
-    expect(groupViolations).toEqual([]);
+  it('leaves no table referencing the dropped websites_legacy', () => {
+    // The rebuild renames `websites` and then drops it. SQLite repoints every
+    // child's foreign key on a rename, so without legacy_alter_table the
+    // children of `websites` ended up keyed to a table that no longer exists.
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+      .all()
+      .map((r) => r.name);
+
+    for (const table of tables) {
+      const targets = db.prepare(`PRAGMA foreign_key_list("${table}")`).all().map((fk) => fk.table);
+      expect(targets, table).not.toContain('websites_legacy');
+    }
+  });
+
+  it('needed no repair — the upgrade itself kept the keys intact', () => {
+    // Boot runs the repair straight after this upgrade, so the checks above
+    // would pass even if the upgrade broke the keys and the repair mended them.
+    // No repair backup means the upgrade never broke them.
+    const dir = path.dirname(dbPath);
+    const base = path.basename(dbPath);
+    const repairs = fs.readdirSync(dir).filter((f) => f.startsWith(`${base}.bak-pre-reference-repair-`));
+    expect(repairs).toEqual([]);
+  });
+
+  it('keeps child keys on `websites` when run directly, without the boot-time repair', () => {
+    const file = createLegacyDatabase();
+    try {
+      const migrations = require('../src/db/migrations');
+      const conn = new Database(file);
+      conn.pragma('foreign_keys = ON');
+      migrations.run(conn);
+      const owner = conn
+        .prepare(`INSERT INTO users (email, password_hash) VALUES ('admin@local', 'x')`)
+        .run().lastInsertRowid;
+
+      migrations.backfillOwnership(conn, owner);
+
+      expect(migrations.tablesReferencingLegacyWebsites(conn)).toEqual([]);
+      expect(conn.pragma('foreign_key_check')).toEqual([]);
+      conn.close();
+    } finally {
+      cleanupDatabase(file);
+    }
+  });
+
+  it('can still save a scan after the upgrade', () => {
+    // This is what was actually broken: every snapshot write failed with
+    // "no such table: main.websites_legacy", so no scan could be recorded.
+    const site = db.prepare('SELECT id, owner_id FROM websites WHERE is_active = 1 LIMIT 1').get();
+
+    const snapshot = db
+      .prepare("INSERT INTO snapshots (website_id, content_text, content_hash) VALUES (?, 'x', 'h')")
+      .run(site.id);
+    db.prepare(
+      `INSERT INTO scan_results (website_id, owner_id, period_days, new_snapshot_id, status)
+       VALUES (?, ?, 30, ?, 'completed')`
+    ).run(site.id, site.owner_id, snapshot.lastInsertRowid);
+
+    // And the key is real, not merely absent: a website that does not exist is
+    // refused.
+    expect(() =>
+      db.prepare("INSERT INTO snapshots (website_id, content_text, content_hash) VALUES (987654, 'x', 'h')").run()
+    ).toThrow(/FOREIGN KEY constraint failed/);
   });
 
   it('can group the inherited websites', async () => {
@@ -290,6 +349,171 @@ describe('ownership migration', () => {
     expect(res.body.website_ids.sort()).toEqual([...ids].sort());
   });
 
+});
+
+describe('repairing a database the old upgrade already broke', () => {
+  let dbPath;
+  let app;
+  let db;
+  let before;
+
+  /**
+   * Put a legacy database through the upgrade exactly as the old code did —
+   * the rename with legacy_alter_table off — producing the state deployed
+   * instances are actually in.
+   */
+  function breakTheWayTheOldUpgradeDid(file) {
+    const migrations = require('../src/db/migrations');
+    const conn = new Database(file);
+    migrations.run(conn);
+    const owner = conn
+      .prepare(`INSERT INTO users (email, password_hash) VALUES ('admin@local', 'x')`)
+      .run().lastInsertRowid;
+
+    conn.pragma('foreign_keys = OFF');
+    conn.exec(`
+      BEGIN;
+      ALTER TABLE websites RENAME TO websites_legacy;
+      ${migrations.TENANT_WEBSITES_DDL}
+    `);
+    conn.prepare(
+      `INSERT INTO websites (owner_id, id, url, name, created_at, is_active, domain, srms_owner)
+       SELECT ?, id, url, name, created_at, is_active, domain, srms_owner FROM websites_legacy`
+    ).run(owner);
+    conn.exec('DROP TABLE websites_legacy; COMMIT;');
+    conn.pragma('foreign_keys = ON');
+    conn.prepare('INSERT INTO schema_migrations (name) VALUES (?)').run(migrations.OWNERSHIP_MIGRATION);
+    migrations.backfillScanOwners(conn);
+
+    // Deleted rows leave AUTOINCREMENT above MAX(id); the repair must not let
+    // those ids be handed out again, since report links carry scan ids.
+    conn.prepare("UPDATE sqlite_sequence SET seq = 500 WHERE name = 'scan_results'").run();
+    conn.close();
+  }
+
+  function indexNames(conn, table) {
+    return conn
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL ORDER BY name")
+      .all(table)
+      .map((r) => r.name);
+  }
+
+  beforeAll(() => {
+    dbPath = createLegacyDatabase();
+    breakTheWayTheOldUpgradeDid(dbPath);
+
+    // Prove the fixture reproduces the bug before trusting the repair.
+    const probe = new Database(dbPath);
+    probe.pragma('foreign_keys = ON');
+    before = {
+      write: (() => {
+        try {
+          probe.prepare("INSERT INTO snapshots (website_id, content_text, content_hash) VALUES (1, 'x', 'h')").run();
+          return 'ok';
+        } catch (err) {
+          return err.message;
+        }
+      })(),
+      snapshots: probe.prepare('SELECT COUNT(*) AS n FROM snapshots').get().n,
+      scans: probe.prepare('SELECT id, website_id, llm_summary FROM scan_results ORDER BY id').all(),
+      snapshotIndexes: indexNames(probe, 'snapshots'),
+      scanIndexes: indexNames(probe, 'scan_results'),
+    };
+    probe.close();
+
+    Object.assign(process.env, {
+      NODE_ENV: 'test',
+      DB_PATH: dbPath,
+      JWT_SECRET: 'repair-test-secret',
+      AUTH_USERNAME: 'admin',
+      AUTH_PASSWORD: 'test-admin-password',
+      DISABLE_RATE_LIMIT: '1',
+      ENABLE_SCHEDULER: 'false',
+    });
+
+    resetModules();
+    app = require('../src/server'); // boot runs the repair
+    db = require('../src/db');
+  });
+
+  afterAll(() => {
+    try { db.close(); } catch { /* already closed */ }
+    cleanupDatabase(dbPath);
+    resetModules();
+  });
+
+  it('starts from a genuinely broken database', () => {
+    expect(before.write).toMatch(/no such table: main\.websites_legacy/);
+  });
+
+  it('points every foreign key back at a table that exists', () => {
+    for (const table of ['snapshots', 'scan_results']) {
+      const targets = db.prepare(`PRAGMA foreign_key_list("${table}")`).all().map((fk) => fk.table);
+      expect(targets, table).not.toContain('websites_legacy');
+      expect(targets, table).toContain('websites');
+    }
+    expect(db.pragma('foreign_key_check')).toEqual([]);
+    expect(db.pragma('integrity_check', { simple: true })).toBe('ok');
+  });
+
+  it('keeps every row, with the same ids', () => {
+    expect(db.prepare('SELECT COUNT(*) AS n FROM snapshots').get().n).toBe(before.snapshots);
+    expect(
+      db.prepare('SELECT id, website_id, llm_summary FROM scan_results ORDER BY id').all()
+    ).toEqual(before.scans);
+  });
+
+  it('keeps the indexes', () => {
+    expect(indexNames(db, 'snapshots')).toEqual(before.snapshotIndexes);
+    expect(indexNames(db, 'scan_results')).toEqual(before.scanIndexes);
+    expect(before.snapshotIndexes.length).toBeGreaterThan(0);
+  });
+
+  it('does not reuse ids past the highest one ever issued', () => {
+    const { seq } = db.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'scan_results'").get();
+    expect(seq).toBe(500);
+  });
+
+  it('can save a scan again, with the key enforced', () => {
+    const site = db.prepare('SELECT id, owner_id FROM websites WHERE is_active = 1 LIMIT 1').get();
+    const snapshot = db
+      .prepare("INSERT INTO snapshots (website_id, content_text, content_hash) VALUES (?, 'x', 'h')")
+      .run(site.id);
+    const scan = db.prepare(
+      `INSERT INTO scan_results (website_id, owner_id, period_days, new_snapshot_id, status)
+       VALUES (?, ?, 30, ?, 'completed')`
+    ).run(site.id, site.owner_id, snapshot.lastInsertRowid);
+
+    expect(scan.lastInsertRowid).toBe(501);
+    expect(() =>
+      db.prepare("INSERT INTO snapshots (website_id, content_text, content_hash) VALUES (987654, 'x', 'h')").run()
+    ).toThrow(/FOREIGN KEY constraint failed/);
+  });
+
+  it('took a file backup before rebuilding anything', () => {
+    const dir = path.dirname(dbPath);
+    const base = path.basename(dbPath);
+    const backups = fs.readdirSync(dir).filter((f) => f.startsWith(`${base}.bak-pre-reference-repair-`));
+    expect(backups).toHaveLength(1);
+  });
+
+  it('is a no-op once repaired', () => {
+    const { migrations } = require('../src/db');
+    expect(migrations.tablesReferencingLegacyWebsites(db)).toEqual([]);
+    expect(migrations.repairLegacyReferences(db)).toEqual([]);
+  });
+
+  it('still serves the data over the API', async () => {
+    const session = await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'test-admin-password' });
+
+    const websites = await as(request(app).get('/api/websites'), session.body.token);
+    expect(websites.body).toHaveLength(6);
+
+    const scans = await as(request(app).get('/api/scans?limit=100'), session.body.token);
+    expect(scans.body.total).toBe(before.scans.length + 1);
+  });
 });
 
 describe('fresh database', () => {

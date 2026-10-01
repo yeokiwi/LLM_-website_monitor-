@@ -862,14 +862,25 @@ Double-check that `OPENAI_API_KEY` contains the correct API key for that provide
 - The target website may be blocking automated requests. Try enabling Firecrawl (`FIRECRAWL_API_KEY`), which renders the page and returns clean markdown, or a search API — Brave (`BRAVE_API_KEY`) or Serper (`SERPER_API_KEY`) — which uses indexed content rather than direct HTTP fetches.
 - Check that the URL includes the `https://` prefix and is publicly accessible.
 
+**Every scan fails with `no such table: main.websites_legacy`**
+This affected instances whose database predates the owner column and was
+upgraded by an earlier build: the upgrade left `snapshots` and `scan_results`
+keyed to a table it then dropped, so no scan could be saved. Current builds
+repair it automatically on start — look for `Repaired foreign keys on
+scan_results, snapshots` in the log. A copy of the database is written to
+`<DB_PATH>.bak-pre-reference-repair-<timestamp>` first, and no rows or ids are
+changed. Nothing needs doing beyond deploying.
+
 **Frontend shows "Failed to load websites"**
 Confirm the backend is running on port `3001`. The Vite dev server proxies `/api` requests to `http://localhost:3001` automatically.
 
 **`Refusing to start in production — JWT_SECRET is unset or still the default`**
 Generate one and set it: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`. The check only fails the boot when `NODE_ENV=production`; elsewhere it warns.
 
-**Signup works but no email arrives**
-`SMTP_HOST` is probably unset, in which case messages are logged rather than sent — look for `📧 [mail not configured]` in the server output. Confirmation links can also be read straight from the `users.verify_token` column while testing.
+**Scheduled scans run but no email arrives**
+- `SMTP_HOST` may be unset, in which case messages are logged rather than sent — look for `📧 [mail not configured]` in the server output. The Schedules page also says so.
+- There may be nobody to send to. Set **default recipients** on the Schedules page, or recipients on the group; a log line reading `there is nobody to tell` means this. The `<AUTH_USERNAME>@local` sign-in address is never mailed.
+- Use **Send test email** on the Schedules page: it reports, per address, whether your mail server accepted the message.
 
 **Sign-in returns 500 "Server is not configured for authentication"**
 `AUTH_PASSWORD` is not set. The server refuses to let anyone in rather than treating an unset password as a match.

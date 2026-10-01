@@ -66,6 +66,18 @@ function bootstrap() {
     }
   }
 
+  // Databases upgraded before backfillOwnership set legacy_alter_table have
+  // `snapshots` and `scan_results` keyed to the dropped `websites_legacy`, and
+  // cannot save a scan. Detected on every boot, so it also catches one restored
+  // from an old file backup; a no-op once repaired.
+  const stale = migrations.tablesReferencingLegacyWebsites(db);
+  if (stale.length > 0) {
+    const backup = backupDatabaseFile('pre-reference-repair');
+    console.log(`📦 Backed up the database to ${backup} before repairing ${stale.join(', ')}.`);
+    migrations.repairLegacyReferences(db);
+    console.log(`✅ Repaired foreign keys on ${stale.join(', ')} — scans can be saved again.`);
+  }
+
   // Also re-run on every boot: a crash between the two steps would otherwise
   // leave scan rows unowned, and unowned rows are invisible to their owner.
   migrations.backfillScanOwners(db);

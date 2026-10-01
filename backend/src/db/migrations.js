@@ -449,10 +449,18 @@ function backfillOwnership(db, ownerId) {
 
   // Foreign keys are deferred for the rename/drop dance; better-sqlite3 forbids
   // toggling the pragma inside a transaction, so it is done around it.
+  //
+  // legacy_alter_table matters as much. Without it SQLite rewrites every child
+  // table's `REFERENCES websites` to follow the rename to `websites_legacy` —
+  // which is then dropped, leaving `snapshots` and `scan_results` keyed to a
+  // table that does not exist and every scan failing to save. With it, the
+  // children keep naming `websites` and resolve to the rebuilt table.
   db.pragma('foreign_keys = OFF');
+  db.pragma('legacy_alter_table = ON');
   try {
     rebuild();
   } finally {
+    db.pragma('legacy_alter_table = OFF');
     db.pragma('foreign_keys = ON');
   }
 
@@ -477,6 +485,116 @@ function backfillScanOwners(db) {
     .run().changes;
 }
 
+// ---------------------------------------------------------------------------
+// Repair: foreign keys left pointing at the dropped `websites_legacy`
+// ---------------------------------------------------------------------------
+
+/**
+ * Tables whose foreign keys name `websites_legacy`, a table that no longer
+ * exists.
+ *
+ * Every database that went through `backfillOwnership` before it set
+ * legacy_alter_table is in this state: the rename repointed the children's
+ * keys, the drop removed their target, and from then on every write to
+ * `snapshots` or `scan_results` failed with "no such table". Only that exact
+ * mapping is repaired — a key to some other missing table is not guessed at.
+ */
+function tablesReferencingLegacyWebsites(db) {
+  if (!tableExists(db, 'websites') || tableExists(db, 'websites_legacy')) return [];
+
+  return db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+    .all()
+    .map((r) => r.name)
+    .filter((name) =>
+      db.prepare(`PRAGMA foreign_key_list("${name}")`).all().some((fk) => fk.table === 'websites_legacy')
+    );
+}
+
+/**
+ * Rebuild each affected table with its keys pointing back at `websites`.
+ *
+ * SQLite cannot alter a foreign key in place, so this is its documented
+ * procedure: create the corrected table under a temporary name, copy every
+ * row (ids included), drop the old one, rename the new one into place, then
+ * recreate the indexes. All tables are rebuilt in one transaction, and
+ * `foreign_key_check` runs before it commits, so a repair that would leave the
+ * data inconsistent rolls back to exactly what was there.
+ *
+ * Callers must take a file backup first — see bootstrap.js.
+ *
+ * @returns {string[]} the tables rebuilt; empty when there was nothing to do
+ */
+function repairLegacyReferences(db) {
+  const tables = tablesReferencingLegacyWebsites(db);
+  if (tables.length === 0) return [];
+
+  const rebuild = db.transaction(() => {
+    for (const name of tables) {
+      const temp = `${name}__repair`;
+      const { sql } = db
+        .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+        .get(name);
+      const indexes = db
+        .prepare("SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL")
+        .all(name)
+        .map((r) => r.sql);
+      const sequence = tableExists(db, 'sqlite_sequence')
+        ? db.prepare('SELECT seq FROM sqlite_sequence WHERE name = ?').get(name)
+        : undefined;
+
+      const header = new RegExp(`^CREATE TABLE\\s+(?:IF NOT EXISTS\\s+)?(["\`\\[]?)${name}\\1?(?=\\s*\\()`, 'i');
+      if (!header.test(sql)) {
+        throw new Error(`Cannot repair "${name}": unrecognised table definition`);
+      }
+      const corrected = sql
+        .replace(header, `CREATE TABLE "${temp}"`)
+        .replace(/REFERENCES\s+["`[]?websites_legacy["`\]]?/gi, 'REFERENCES websites');
+
+      const columns = db
+        .prepare(`PRAGMA table_info("${name}")`)
+        .all()
+        .map((c) => `"${c.name}"`)
+        .join(', ');
+
+      db.exec(corrected);
+      db.exec(`INSERT INTO "${temp}" (${columns}) SELECT ${columns} FROM "${name}"`);
+      db.exec(`DROP TABLE "${name}"`);
+      db.exec(`ALTER TABLE "${temp}" RENAME TO "${name}"`);
+      for (const index of indexes) db.exec(index);
+
+      // AUTOINCREMENT promises an id is never issued twice, but the copy only
+      // advances the counter to MAX(id). Restore the old high-water mark:
+      // report links in sent emails carry scan ids.
+      if (sequence) {
+        db.prepare('UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = ?').run(sequence.seq, name);
+      }
+    }
+
+    const violations = db.pragma('foreign_key_check');
+    if (violations.length > 0) {
+      const { table, parent } = violations[0];
+      throw new Error(
+        `Repair would leave ${violations.length} row(s) in "${table}" referencing a missing "${parent}"`
+      );
+    }
+  });
+
+  // As in backfillOwnership: keys off so DROP TABLE does not cascade into the
+  // rows being preserved, and legacy_alter_table on so the final rename does
+  // not rewrite references in any other table.
+  db.pragma('foreign_keys = OFF');
+  db.pragma('legacy_alter_table = ON');
+  try {
+    rebuild();
+  } finally {
+    db.pragma('legacy_alter_table = OFF');
+    db.pragma('foreign_keys = ON');
+  }
+
+  return tables;
+}
+
 module.exports = {
   run,
   addColumn,
@@ -485,5 +603,8 @@ module.exports = {
   tableExists,
   backfillOwnership,
   backfillScanOwners,
+  tablesReferencingLegacyWebsites,
+  repairLegacyReferences,
   OWNERSHIP_MIGRATION,
+  TENANT_WEBSITES_DDL,
 };
