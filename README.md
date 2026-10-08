@@ -108,11 +108,11 @@ Providers can also refuse a query outright (HTTP 400 — free Serper accounts re
 
 | Layer | Technology |
 |---|---|
-| Backend runtime | Node.js 18+ |
+| Backend runtime | Node.js 20+ |
 | Backend framework | Express 4 |
 | Database | SQLite via `better-sqlite3` (no server required) |
 | Web scraping | Firecrawl API · Brave Search API · Serper Search API · axios + cheerio (fallback) |
-| Excel / CSV parsing | SheetJS (`xlsx`) |
+| Excel / CSV parsing | SheetJS (`xlsx`), installed from the SheetJS CDN — see below |
 | File upload | multer |
 | Text diffing | `diff` (line-level) |
 | LLM — Claude | `@anthropic-ai/sdk` |
@@ -201,7 +201,7 @@ Providers can also refuse a query outright (HTTP 400 — free Serper accounts re
 
 | Requirement | Version | Notes |
 |---|---|---|
-| Node.js | 18 or later | https://nodejs.org |
+| Node.js | 20 or later | https://nodejs.org — nodemailer 10 and React Router 7 require it; `engines` in both `package.json` files says so |
 | npm | 8 or later | bundled with Node.js |
 | LLM API key | — | One of: Anthropic, OpenAI, Groq, Together AI, Mistral, etc. — or none for local models (Ollama/LM Studio) |
 | Firecrawl API key | — | Optional — full-page markdown scraping, https://firecrawl.dev |
@@ -322,6 +322,14 @@ cd backend && npm install
 cd ../frontend && npm install
 ```
 
+**Why `xlsx` installs from a URL.** SheetJS stopped publishing to npm at 0.18.5,
+which has two known high-severity flaws (prototype pollution, CVE-2023-30533,
+and a ReDoS, CVE-2024-22363). Fixed releases are published only on the SheetJS
+CDN, so `backend/package.json` points at
+`https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz` and the lockfile pins its
+integrity hash — `npm ci` refuses anything else. The build therefore needs to
+reach `cdn.sheetjs.com` as well as the npm registry.
+
 ---
 
 ## Running the Application
@@ -330,7 +338,7 @@ Both the backend and frontend must be running at the same time. Open **two termi
 
 ### Development mode
 
-**Terminal 1 — backend** (auto-restarts on file changes):
+**Terminal 1 — backend** (auto-restarts on file changes, using Node's built-in `node --watch`):
 
 ```bash
 cd backend
@@ -341,7 +349,7 @@ Expected output:
 ```
 🚀 Website Monitor backend running on http://localhost:3001
    LLM provider : claude
-   LLM model    : claude-opus-4-6
+   LLM model    : claude-opus-5
    LLM base URL : https://api.anthropic.com
    Scraper      : Brave Search API
 ```
