@@ -63,3 +63,12 @@ jobs:
       # build should fail here rather than on Railway.
       - name: Build image
         run: docker build -t website-monitor:ci .
+
+      # The droplet deployment's compose file and Caddyfile, checked before a
+      # server tries to start them.
+      - name: Validate docker-compose.yml and Caddyfile
+        run: |
+          cp .env.production.example .env
+          docker compose config --quiet
+          docker run --rm -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            -e DOMAIN=:80 caddy:2.10-alpine caddy validate --config /etc/caddy/Caddyfile

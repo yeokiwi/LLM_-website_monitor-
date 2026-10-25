@@ -27,6 +27,7 @@ One shared username and password, set in the server's environment, protect one s
   - [3. Add a persistent volume for SQLite](#3-add-a-persistent-volume-for-sqlite)
   - [4. Set environment variables](#4-set-environment-variables)
   - [5. Deploy](#5-deploy)
+- [Deploying to a DigitalOcean Droplet](#deploying-to-a-digitalocean-droplet)
 - [Environment Variables](#environment-variables)
 - [Scheduled Scans & Email](#scheduled-scans--email)
 - [Testing](#testing)
@@ -128,6 +129,17 @@ Providers can also refuse a query outright (HTTP 400 — free Serper accounts re
 ```
 .
 ├── README.md
+├── Dockerfile                  ← multi-stage build: frontend, then the backend image
+├── docker-compose.yml          ← app + Caddy (HTTPS) for a single server / droplet
+├── .env.production.example     ← copy to .env for docker-compose.yml
+├── deploy/
+│   ├── Caddyfile               ← reverse proxy, automatic Let's Encrypt certificates
+│   └── digitalocean/
+│       ├── setup-droplet.sh    ← one-time: Docker, swap, firewall
+│       ├── update.sh           ← pull, back up, rebuild, restart
+│       └── backup.sh           ← online SQLite backup to data/backups/
+├── docs/
+│   └── DEPLOY_DIGITALOCEAN.md  ← step-by-step droplet deployment guide
 ├── .github/workflows/ci.yml    ← backend tests, frontend build, Docker build
 ├── backend/
 │   ├── .env.example            ← copy to .env and fill in keys
@@ -457,6 +469,36 @@ Generate a secure `JWT_SECRET` locally and paste the output into Railway:
 Click **Deploy** (or push a new commit — Railway redeploys automatically on every push to the linked branch).
 
 Once the build completes, Railway provides a public URL such as `https://your-app.up.railway.app`. The health check endpoint `/api/health` is used by Railway to confirm the service is ready.
+
+---
+
+## Deploying to a DigitalOcean Droplet
+
+A single DigitalOcean **Basic** droplet (1 GB RAM is plenty) runs the whole app
+with Docker Compose: the app container, plus [Caddy](https://caddyserver.com) in
+front of it for automatic HTTPS. The SQLite database lives on the droplet's disk
+in `data/`. **The full walkthrough — droplet sizing, DNS, HTTPS, updates, backups
+and troubleshooting — is in [docs/DEPLOY_DIGITALOCEAN.md](docs/DEPLOY_DIGITALOCEAN.md).**
+
+The short version, on a fresh Ubuntu LTS droplet, as root:
+
+```bash
+apt-get update && apt-get install -y git
+git clone https://github.com/yeokiwi/LLM_-website_monitor-.git /opt/website-monitor
+cd /opt/website-monitor
+
+# Docker, a 2 GB swap file (so the build fits in 1 GB of RAM), firewall
+bash deploy/digitalocean/setup-droplet.sh
+
+# DOMAIN, APP_URL, AUTH_PASSWORD, JWT_SECRET (openssl rand -hex 48), LLM key, ...
+cp .env.production.example .env && chmod 600 .env && nano .env
+
+docker compose up -d --build
+```
+
+Then open `https://<DOMAIN>` (or `http://<droplet-ip>` while `DOMAIN=:80`).
+Deploy later versions with `bash deploy/digitalocean/update.sh`, and take a
+database backup with `bash deploy/digitalocean/backup.sh`.
 
 ---
 

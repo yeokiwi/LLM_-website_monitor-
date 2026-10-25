@@ -1,0 +1,22 @@
+# Reverse proxy for docker-compose.yml.
+#
+# DOMAIN comes from .env. With a hostname, Caddy fetches a Let's Encrypt
+# certificate and redirects HTTP to HTTPS on its own; with ":80" it serves plain
+# HTTP on the droplet's IP address.
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Spreadsheet imports and database restores are uploaded through the app.
+	request_body {
+		max_size 100MB
+	}
+
+	reverse_proxy app:3001 {
+		# Scans can take minutes (scraping plus an LLM call per site).
+		transport http {
+			read_timeout 10m
+			write_timeout 10m
+		}
+	}
+}
