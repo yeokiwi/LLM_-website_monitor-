@@ -16,6 +16,7 @@
 .checkCol { width: 40px; }
 .name { font-weight: 500; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .unnamed { color: #9ca3af; }
+.readonlyText { color: #4b5563; font-size: 0.82rem; word-break: break-word; }
 .url a { color: #6366f1; text-decoration: none; word-break: break-all; }
 .url a:hover { text-decoration: underline; }
 .center { text-align: center; }
@@ -55,6 +56,22 @@
 }
 .scraperOption:last-child { margin-right: 0; }
 .scraperOption input { cursor: pointer; accent-color: #6366f1; }
+
+/* An engine the current plan does not include: shown, but not selectable, so
+   the value of upgrading is visible rather than hidden. */
+.scraperOptionLocked {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 12px;
+  font-size: 0.8rem;
+  color: #9ca3af;
+  cursor: not-allowed;
+  user-select: none;
+}
+.scraperOptionLocked:last-child { margin-right: 0; }
+.scraperOptionLocked input { cursor: not-allowed; }
+.scraperHeadGroup .scraperOptionLocked { font-weight: 400; margin-right: 0; }
 .remarkHead { white-space: nowrap; }
 .remarkCell { min-width: 160px; }
 .remarkInput {

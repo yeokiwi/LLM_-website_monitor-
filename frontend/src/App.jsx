@@ -1,19 +1,57 @@
 import React, { useEffect, useState } from 'react';
-import { Routes, Route, NavLink } from 'react-router-dom';
+import { Routes, Route, NavLink, Navigate, useLocation, Outlet } from 'react-router-dom';
+
 import Dashboard from './pages/Dashboard';
 import History from './pages/History';
 import LoginPage from './pages/LoginPage';
+import SchedulesPage from './pages/SchedulesPage';
 import ReportPage from './pages/ReportPage';
+import BackupPage from './pages/BackupPage';
+import GroupsPage from './pages/GroupsPage';
 import HelpPage from './pages/HelpPage';
+
+import ErrorBoundary from './components/ErrorBoundary';
 import { ScanProvider, useScan } from './context/ScanContext';
-import { getHealth, getMe, storeSession, clearSession, getStoredToken } from './api/client';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { getHealth } from './api/client';
 import styles from './App.module.css';
 
 // ---------------------------------------------------------------------------
-// Inner shell — consumes ScanContext for the header indicator
+// Route guards
 // ---------------------------------------------------------------------------
-function AppShell({ user, health, onLogout }) {
+
+/** Requires a signed-in session; remembers where the user was headed. */
+function RequireAuth() {
+  const { loading, isAuthenticated } = useAuth();
+  const location = useLocation();
+
+  if (loading) return <div className={styles.loading}>Loading…</div>;
+  if (!isAuthenticated) return <Navigate to="/login" state={{ from: location }} replace />;
+
+  return <Outlet />;
+}
+
+/** Keeps a signed-in user out of the sign-in screen. */
+function RedirectIfAuthenticated({ children }) {
+  const { loading, isAuthenticated } = useAuth();
+  if (loading) return <div className={styles.loading}>Loading…</div>;
+  if (isAuthenticated) return <Navigate to="/" replace />;
+  return children;
+}
+
+// ---------------------------------------------------------------------------
+// Signed-in shell
+// ---------------------------------------------------------------------------
+function AppShell() {
   const { scanning, progress } = useScan();
+  const { username, logout } = useAuth();
+  const [health, setHealth] = useState(null);
+
+  useEffect(() => {
+    getHealth().then(setHealth).catch(() => setHealth({ status: 'error' }));
+  }, []);
+
+  const navClass = ({ isActive }) => (isActive ? styles.active : '');
 
   return (
     <div className={styles.app}>
@@ -22,15 +60,12 @@ function AppShell({ user, health, onLogout }) {
           <span className={styles.logo}>🔍 Website Monitor</span>
 
           <nav className={styles.nav}>
-            <NavLink to="/" end className={({ isActive }) => isActive ? styles.active : ''}>
-              Dashboard
-            </NavLink>
-            <NavLink to="/history" className={({ isActive }) => isActive ? styles.active : ''}>
-              Scan History
-            </NavLink>
-            <NavLink to="/help" className={({ isActive }) => isActive ? styles.active : ''}>
-              Help
-            </NavLink>
+            <NavLink to="/" end className={navClass}>Dashboard</NavLink>
+            <NavLink to="/history" className={navClass}>Scan History</NavLink>
+            <NavLink to="/groups" className={navClass}>Groups</NavLink>
+            <NavLink to="/schedules" className={navClass}>Schedules</NavLink>
+            <NavLink to="/backup" className={navClass}>Backup</NavLink>
+            <NavLink to="/help" className={navClass}>Help</NavLink>
           </nav>
 
           <div className={styles.right}>
@@ -58,8 +93,10 @@ function AppShell({ user, health, onLogout }) {
             )}
 
             <div className={styles.userInfo}>
-              <span className={styles.userName}>{user}</span>
-              <button className={styles.logoutBtn} onClick={onLogout}>
+              <span className={styles.userName}>
+                <span className={styles.userLabel}>{username}</span>
+              </span>
+              <button className={styles.logoutBtn} onClick={logout}>
                 Sign out
               </button>
             </div>
@@ -67,57 +104,45 @@ function AppShell({ user, health, onLogout }) {
         </div>
       </header>
 
-      <main className={styles.main}>
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/history" element={<History />} />
-          <Route path="/report/:id" element={<ReportPage />} />
-          <Route path="/help" element={<HelpPage />} />
-        </Routes>
-      </main>
+      <main className={styles.main}><Outlet /></main>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Root — handles auth, provides ScanContext
+// Root
 // ---------------------------------------------------------------------------
 export default function App() {
-  const [user, setUser]     = useState(null); // null=loading, false=unauthed, string=username
-  const [health, setHealth] = useState(null);
-
-  useEffect(() => {
-    const token = getStoredToken();
-    if (!token) { setUser(false); return; }
-    getMe()
-      .then((data) => setUser(data.username))
-      .catch(() => { clearSession(); setUser(false); });
-  }, []);
-
-  useEffect(() => {
-    if (!user) return;
-    getHealth()
-      .then(setHealth)
-      .catch(() => setHealth({ status: 'error' }));
-  }, [user]);
-
-  function handleLogin(token, username) {
-    storeSession(token, username);
-    setUser(username);
-  }
-
-  function handleLogout() {
-    clearSession();
-    setUser(false);
-    setHealth(null);
-  }
-
-  if (user === null) return <div className={styles.loading}>Loading…</div>;
-  if (user === false) return <LoginPage onLogin={handleLogin} />;
-
   return (
-    <ScanProvider>
-      <AppShell user={user} health={health} onLogout={handleLogout} />
-    </ScanProvider>
+    <AuthProvider>
+      <ScanProvider>
+        {/* A render error inside any page shows a message rather than
+            unmounting the tree and leaving a blank white document. */}
+        <ErrorBoundary>
+          <Routes>
+            {/* Public */}
+            <Route
+              path="/login"
+              element={<RedirectIfAuthenticated><LoginPage /></RedirectIfAuthenticated>}
+            />
+
+            {/* Signed in */}
+            <Route element={<RequireAuth />}>
+              <Route element={<AppShell />}>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/history" element={<History />} />
+                <Route path="/groups" element={<GroupsPage />} />
+                <Route path="/schedules" element={<SchedulesPage />} />
+                <Route path="/report/:id" element={<ReportPage />} />
+                <Route path="/backup" element={<BackupPage />} />
+                <Route path="/help" element={<HelpPage />} />
+              </Route>
+            </Route>
+
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </ErrorBoundary>
+      </ScanProvider>
+    </AuthProvider>
   );
 }

@@ -4,19 +4,16 @@ const api = axios.create({ baseURL: '/api' });
 
 // ── Token helpers ─────────────────────────────────────────────────────────────
 const TOKEN_KEY = 'wm_token';
-const USER_KEY  = 'wm_user';
 
-export const getStoredToken    = () => localStorage.getItem(TOKEN_KEY);
-export const getStoredUser     = () => localStorage.getItem(USER_KEY);
+export const getStoredToken = () => localStorage.getItem(TOKEN_KEY);
 
-export const storeSession = (token, username) => {
-  localStorage.setItem(TOKEN_KEY, token);
-  localStorage.setItem(USER_KEY, username);
-};
+export const storeToken = (token) => localStorage.setItem(TOKEN_KEY, token);
 
 export const clearSession = () => {
   localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(USER_KEY);
+  // Clear the keys older sessions used, so a stale identity is not left behind
+  // in the browser after an upgrade.
+  ['wm_user', 'wm_role'].forEach((k) => localStorage.removeItem(k));
 };
 
 // ── Request interceptor — attach JWT to every request ────────────────────────
@@ -28,24 +25,33 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// ── Response interceptor — on 401, clear session and reload to force login ───
+// ── Response interceptor ─────────────────────────────────────────────────────
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401 && error.config?.url !== '/auth/login') {
+    const status = error.response?.status;
+    const url = error.config?.url || '';
+
+    // A 401 on the login request itself is just a wrong password; anywhere else
+    // it means the session died and the form should be shown again.
+    if (status === 401 && url !== '/auth/login') {
       clearSession();
-      window.location.href = '/';
+      window.location.href = '/login';
     }
+
     return Promise.reject(error);
   }
 );
+
+/** Pull the human-readable message out of an axios error. */
+export const errorMessage = (err, fallback = 'Something went wrong') =>
+  err?.response?.data?.error || err?.message || fallback;
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 export const login = (username, password) =>
   api.post('/auth/login', { username, password }).then((r) => r.data);
 
-export const getMe = () =>
-  api.get('/auth/me').then((r) => r.data);
+export const getMe = () => api.get('/auth/me').then((r) => r.data);
 
 // ── Websites ──────────────────────────────────────────────────────────────────
 export const getWebsites = () => api.get('/websites').then((r) => r.data);
@@ -69,6 +75,46 @@ export const bulkDeleteWebsites = (ids) =>
 export const bulkUpdateWebsites = (ids, fields) =>
   api.post('/websites/bulk-update', { ids, updates: fields }).then((r) => r.data);
 
+// ── Schedules ─────────────────────────────────────────────────────────────────
+export const getSchedules = () => api.get('/schedules').then((r) => r.data);
+
+export const setSchedule = (websiteId, { frequency, periodDays, isEnabled }) =>
+  api.put(`/schedules/${websiteId}`, { frequency, periodDays, isEnabled }).then((r) => r.data);
+
+export const removeSchedule = (websiteId) =>
+  api.delete(`/schedules/${websiteId}`).then((r) => r.data);
+
+// ── Groups ────────────────────────────────────────────────────────────────────
+/** `{ groups, allowedFrequencies }` */
+export const getGroups = () => api.get('/groups').then((r) => r.data);
+
+export const createGroup = ({ name, websiteIds, notifyEmails, notifyOn }) =>
+  api.post('/groups', { name, websiteIds, notifyEmails, notifyOn }).then((r) => r.data);
+
+/** Only the fields passed are changed. */
+export const updateGroup = (id, fields) =>
+  api.patch(`/groups/${id}`, fields).then((r) => r.data);
+
+export const deleteGroup = (id) => api.delete(`/groups/${id}`).then((r) => r.data);
+
+export const setGroupSchedule = (id, { frequency, periodDays, isEnabled }) =>
+  api.put(`/groups/${id}/schedule`, { frequency, periodDays, isEnabled }).then((r) => r.data);
+
+export const removeGroupSchedule = (id) =>
+  api.delete(`/groups/${id}/schedule`).then((r) => r.data);
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+/** `{ defaultEmails, smtpConfigured, accountEmail, accountEmailUsable }` */
+export const getNotificationSettings = () =>
+  api.get('/settings/notifications').then((r) => r.data);
+
+export const saveNotificationSettings = (defaultEmails) =>
+  api.put('/settings/notifications', { defaultEmails }).then((r) => r.data);
+
+/** Sends to the default list, or `emails` when given. `{ results, allSent }` */
+export const sendTestEmail = (emails) =>
+  api.post('/settings/notifications/test', emails ? { emails } : {}).then((r) => r.data);
+
 // ── Upload ────────────────────────────────────────────────────────────────────
 export const uploadExcel = (file) => {
   const form = new FormData();
@@ -78,19 +124,30 @@ export const uploadExcel = (file) => {
   }).then((r) => r.data);
 };
 
-// ── Database & data export ────────────────────────────────────────────────────
-export const exportDatabase = () =>
-  api.get('/database/export', { responseType: 'blob' });
+// ── Data export ───────────────────────────────────────────────────────────────
+export const exportMyData = () =>
+  api.get('/database/my-data', { responseType: 'blob' });
 
 export const exportWebsites = () =>
   api.get('/websites/export', { responseType: 'blob' });
 
+// ── Backup and restore ────────────────────────────────────────────────────────
+export const exportDatabase = () =>
+  api.get('/database/export', { responseType: 'blob' });
+
+/**
+ * Replace every website, scan and schedule on the instance with the uploaded
+ * backup. The confirmation is a query parameter the server insists on, so a
+ * stray POST cannot wipe the data on its own.
+ */
 export const importDatabase = (file) => {
   const form = new FormData();
   form.append('file', file);
-  return api.post('/database/import', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  }).then((r) => r.data);
+  return api
+    .post('/database/import?confirm=replace-all-data', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    .then((r) => r.data);
 };
 
 // Trigger a browser download from a blob axios response, using the filename
@@ -110,6 +167,23 @@ export const downloadBlob = (response, fallbackName) => {
   window.URL.revokeObjectURL(url);
 };
 
+/**
+ * A blob response can still be an error — axios does not parse the JSON body
+ * when responseType is 'blob', so the error arrives as a Blob of JSON. Read it
+ * back so the caller gets a real message rather than "[object Blob]".
+ */
+export async function readBlobError(err) {
+  const data = err?.response?.data;
+  if (data instanceof Blob) {
+    try {
+      return JSON.parse(await data.text());
+    } catch {
+      return {};
+    }
+  }
+  return data || {};
+}
+
 // ── Scans ─────────────────────────────────────────────────────────────────────
 export const triggerScan = (websiteIds, periodDays) =>
   api.post('/scans', { websiteIds, periodDays }).then((r) => r.data);
@@ -126,5 +200,15 @@ export const updateScanRemark = (id, remark) =>
 export const getWebsiteScans = (websiteId) =>
   api.get(`/scans/website/${websiteId}`).then((r) => r.data);
 
+// Export scan reports as a single PDF. Pass an array of scan ids to export a
+// specific subset (e.g. the filtered history view); omit to export all.
+export const exportScansPdf = (ids) =>
+  api.get('/scans/export-pdf', {
+    responseType: 'blob',
+    params: ids && ids.length ? { ids: ids.join(',') } : undefined,
+  });
+
 // ── Health ────────────────────────────────────────────────────────────────────
 export const getHealth = () => api.get('/health').then((r) => r.data);
+
+export default api;

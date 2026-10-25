@@ -16,3 +16,5 @@
 .hint { font-size: 0.78rem; color: #6b7280; }
 .error { color: #ef4444; font-size: 0.85rem; }
 .success { color: #16a34a; font-size: 0.85rem; }
+.link { color: #6366f1; font-weight: 600; text-decoration: none; }
+.link:hover { text-decoration: underline; }

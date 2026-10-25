@@ -1,8 +1,24 @@
 .page { display: flex; flex-direction: column; gap: 20px; }
 
-.header { display: flex; align-items: baseline; gap: 12px; }
+.header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .title { font-size: 1.4rem; font-weight: 700; color: #111827; }
 .count { font-size: 0.85rem; color: #9ca3af; }
+.headerRight { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+
+.exportBtn {
+  padding: 8px 14px;
+  background: #4f46e5;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+.exportBtn:hover:not(:disabled) { background: #4338ca; }
+.exportBtn:disabled { background: #c7c9d1; cursor: not-allowed; }
 
 .error { color: #ef4444; font-size: 0.88rem; }
 .loading { color: #9ca3af; font-size: 0.95rem; text-align: center; padding: 40px; }

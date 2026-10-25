@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import s from './HelpPage.module.css';
 
@@ -13,6 +13,9 @@ const TOC = [
   { id: 'scan-results',   label: 'Understanding Results' },
   { id: 'reports',        label: 'Change Reports' },
   { id: 'history',        label: 'Scan History' },
+  { id: 'groups',         label: 'Website Groups' },
+  { id: 'schedules',      label: 'Automatic Scans' },
+  { id: 'backup',         label: 'Backup & Restore' },
   { id: 'configuration',  label: 'Configuration' },
   { id: 'faq',            label: 'FAQ' },
 ];
@@ -161,8 +164,13 @@ export default function HelpPage() {
             </div>
             <div className={s.featureCard}>
               <span className={s.featureIcon}>🔒</span>
-              <strong>Authentication</strong>
-              <p>Username/password login with JWT sessions keeps your monitoring data private.</p>
+              <strong>Your own workspace</strong>
+              <p>Your websites and scan history belong to your account alone — no other account can see them.</p>
+            </div>
+            <div className={s.featureCard}>
+              <span className={s.featureIcon}>⏱️</span>
+              <strong>Automatic scans</strong>
+              <p>Single sites or whole groups can be checked hourly, daily or weekly, with an email to the people who need it.</p>
             </div>
           </div>
         </Section>
@@ -171,9 +179,11 @@ export default function HelpPage() {
 
         {/* ── 2. Getting Started ──────────────────────────────────────────── */}
         <Section id="getting-started" icon="🚀" title="Getting Started">
-          <Step n={1} title="Log in">
-            Open the app in your browser. You'll see the login screen. Enter the
-            credentials configured by your administrator (default username: <code className={s.code}>admin</code>).
+          <Step n={1} title="Sign in">
+            Open the app and sign in with the username and password set for this
+            deployment. There is one shared login for everyone who uses it; whoever
+            runs the service sets it with <code className={s.code}>AUTH_USERNAME</code> and{' '}
+            <code className={s.code}>AUTH_PASSWORD</code>.
           </Step>
 
           <Step n={2} title="Add your first website">
@@ -196,7 +206,7 @@ export default function HelpPage() {
           </Step>
 
           <Callout type="tip">
-            Sessions last 24 hours by default. You'll be redirected to the login page automatically
+            Sessions last 24 hours by default. You'll be redirected to the sign-in page automatically
             when your session expires.
           </Callout>
         </Section>
@@ -425,7 +435,7 @@ export default function HelpPage() {
             <li>10 results per page. Use <strong>Previous</strong> / <strong>Next</strong> to navigate.</li>
             <li>The total scan count is shown above the results.</li>
             <li>Each card behaves identically to the Dashboard cards — click to expand, use the report link.</li>
-            <li>History is never automatically deleted; it accumulates as an audit trail.</li>
+            <li>History is kept indefinitely unless <code className={s.code}>HISTORY_RETENTION_DAYS</code> is set on the server.</li>
           </ul>
 
           <Callout type="info">
@@ -437,19 +447,165 @@ export default function HelpPage() {
 
         <hr className={s.divider} />
 
-        {/* ── 8. Configuration ────────────────────────────────────────────── */}
+        {/* ── 8. Automatic Scans ──────────────────────────────────────────── */}
+        <Section id="groups" icon="🗂️" title="Website Groups">
+          <p className={s.p}>
+            A group is a named, saved set of websites — say, every statute page your
+            team owns. Instead of ticking the same twenty boxes before every scan,
+            pick the group.
+          </p>
+
+          <Step n={1} title="Create a group">
+            Tick the websites on the <Link to="/" className={s.link}>Dashboard</Link>,
+            then choose <strong>Save selection as group</strong> and give it a name. Or
+            use <strong>New group</strong> on the{' '}
+            <Link to="/groups" className={s.link}>Groups</Link> page and pick the
+            websites from a filterable list.
+          </Step>
+          <Step n={2} title="Scan it by hand">
+            On the Dashboard, choose the group from the <strong>Group</strong> menu —
+            its websites are selected — and click <strong>Scan Selected</strong>. Or
+            click <strong>Scan now</strong> on the Groups page.
+          </Step>
+          <Step n={3} title="Or scan it on a schedule">
+            Give the group a cadence on the{' '}
+            <Link to="/schedules" className={s.link}>Schedules</Link> page, and say on
+            the Groups page who should be emailed.
+          </Step>
+
+          <p className={s.p}>
+            A website can be in any number of groups. Deleting a group never deletes
+            its websites or their history, and removing a website takes it out of
+            every group it was in.
+          </p>
+        </Section>
+
+        <hr className={s.divider} />
+
+        {/* ── Automatic scans ─────────────────────────────────────────────── */}
+        <Section id="schedules" icon="⏱️" title="Automatic Scans">
+          <p className={s.p}>
+            A group, or a single website, can be checked on a schedule instead of you
+            clicking <strong>Scan Selected</strong> yourself. Open the{' '}
+            <Link to="/schedules" className={s.link}>Schedules</Link> page and pick a
+            cadence.
+          </p>
+
+          <div className={s.envTable}>
+            <div className={s.envRow}><code className={s.envKey}>Manual only</code><span>The default. Nothing runs unless you click Scan.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>Every week</code><span>A weekly sweep</span></div>
+            <div className={s.envRow}><code className={s.envKey}>Every day</code><span>Once a day</span></div>
+            <div className={s.envRow}><code className={s.envKey}>Every hour</code><span>For pages that change often</span></div>
+          </div>
+
+          <p className={s.p}>
+            <strong>Who is emailed.</strong> A group emails its own recipients. A group
+            with none, and every single-website schedule, uses the{' '}
+            <strong>default recipients</strong> set at the top of the Schedules page.
+            Use <strong>Send test email</strong> there to check that messages arrive.
+          </p>
+
+          <p className={s.p}>
+            <strong>What is sent.</strong> A scheduled group run sends one digest per
+            run — never one email per website — listing every site with its result
+            and a link to each report, changed and failed sites first. Each group
+            chooses whether to email after every run or only when something changed
+            or a scan failed. A single website's schedule emails when it changes.
+          </p>
+
+          <Callout type="warning">
+            Email needs SMTP configured on the server. Without it, schedules still
+            run, but each message is written to the server log instead — the
+            Schedules page says so when this is the case.
+          </Callout>
+
+          <Callout type="info">
+            Every scan costs real money in LLM and scraper API calls, so pick the
+            slowest cadence that still catches what you need. A website in a
+            scheduled group <em>and</em> on its own schedule is scanned by both; the
+            Schedules page flags this. Websites shared by groups that are due at the
+            same moment are scanned once and reported in each.
+          </Callout>
+
+          <Callout type="tip">
+            Turning a schedule on does not scan immediately. The first automatic run
+            happens one interval later, so switching on a daily schedule won't spend
+            a scan the moment you click.
+          </Callout>
+        </Section>
+
+        <hr className={s.divider} />
+
+        {/* ── 10. Backup & Restore ────────────────────────────────────────── */}
+        <Section id="backup" icon="💾" title="Backup & Restore">
+          <p className={s.p}>
+            The <Link to="/backup" className={s.link}>Backup</Link> page downloads
+            everything this instance holds as a single SQLite file, and restores
+            from one taken earlier or on another instance.
+          </p>
+
+          <div className={s.envTable}>
+            <div className={s.envRow}>
+              <code className={s.envKey}>Full backup (.db)</code>
+              <span>Every website, snapshot, scan and schedule. This is the one you restore from.</span>
+            </div>
+            <div className={s.envRow}>
+              <code className={s.envKey}>My data (.json)</code>
+              <span>Websites and reports in readable form, for reading elsewhere. Not restorable.</span>
+            </div>
+          </div>
+
+          <Callout type="info">
+            A backup carries no sign-in credentials. The username and password
+            live in the server&apos;s environment rather than the database, so the
+            file is safe to keep with your other backups — and it restores onto
+            any instance whatever its login is, because every row is re-assigned
+            to the account doing the restore.
+          </Callout>
+
+          <Callout type="warning">
+            Restoring <strong>replaces</strong> everything — anything added since
+            the backup was taken is gone. The data being replaced is written to a
+            <code> .bak-…</code> file beside the database first, but recovering
+            from that needs server access; it cannot be undone from the app. The
+            page asks you to type a confirmation for exactly this reason.
+          </Callout>
+        </Section>
+
+        <hr className={s.divider} />
+
+        {/* ── 11. Configuration ───────────────────────────────────────────── */}
         <Section id="configuration" icon="⚙️" title="Configuration">
+          <Callout type="info">
+            This section is for whoever <em>runs</em> the service. If you are just
+            using it, nothing here applies.
+          </Callout>
+
           <p className={s.p}>
             All configuration is done via environment variables in <code className={s.code}>backend/.env</code>.
             Copy <code className={s.code}>backend/.env.example</code> as a starting point.
           </p>
 
-          <h3 className={s.subTitle}>Authentication</h3>
+          <h3 className={s.subTitle}>Sign-in</h3>
+          <p className={s.p}>
+            There is one shared login for the whole deployment, and it lives entirely
+            in the environment. Change <code className={s.code}>AUTH_PASSWORD</code> and
+            restart, and the new password takes effect immediately.
+          </p>
           <div className={s.envTable}>
-            <div className={s.envRow}><code className={s.envKey}>AUTH_USERNAME</code><span>Login username. Default: <code className={s.code}>admin</code></span></div>
-            <div className={s.envRow}><code className={s.envKey}>AUTH_PASSWORD</code><span><strong>Required.</strong> Login password. No default.</span></div>
-            <div className={s.envRow}><code className={s.envKey}>JWT_SECRET</code><span>Secret used to sign tokens. Use a long random string in production.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>APP_URL</code><span>Public URL of the app. Used for links in change alerts and the allowed CORS origin.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>AUTH_USERNAME</code><span>The sign-in name. Default: <code className={s.code}>admin</code></span></div>
+            <div className={s.envRow}><code className={s.envKey}>AUTH_PASSWORD</code><span><strong>Required.</strong> The sign-in password. Nobody can sign in until it is set.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>JWT_SECRET</code><span>Secret used to sign tokens. The server refuses to start in production if this is unset or left at its default.</span></div>
             <div className={s.envRow}><code className={s.envKey}>JWT_EXPIRES_IN</code><span>Session lifetime. Default: <code className={s.code}>24h</code>. Examples: <code className={s.code}>7d</code>, <code className={s.code}>30d</code></span></div>
+          </div>
+
+          <h3 className={s.subTitle}>Scheduling &amp; email</h3>
+          <div className={s.envTable}>
+            <div className={s.envRow}><code className={s.envKey}>ENABLE_SCHEDULER</code><span>Run background scans. On by default in production, off elsewhere.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>HISTORY_RETENTION_DAYS</code><span>Delete scans and snapshot bodies older than this. Unset means keep everything.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>SMTP_HOST</code><span>Outgoing mail server. Without it, messages are logged rather than sent.</span></div>
+            <div className={s.envRow}><code className={s.envKey}>SMTP_USER</code><span>With <code className={s.code}>SMTP_PORT</code>, <code className={s.code}>SMTP_PASS</code> and <code className={s.code}>SMTP_FROM</code>.</span></div>
           </div>
 
           <Callout type="warning">
@@ -536,14 +692,19 @@ export default function HelpPage() {
             </p>
           </details>
 
+
           <details className={s.faq}>
-            <summary className={s.faqQ}>How do I change the login credentials?</summary>
+            <summary className={s.faqQ}>Who can see the sites being monitored?</summary>
             <p className={s.faqA}>
-              Update <code className={s.code}>AUTH_USERNAME</code> and <code className={s.code}>AUTH_PASSWORD</code> in
-              your <code className={s.code}>backend/.env</code> file and restart the server. Existing
-              JWT tokens will still work until they expire (default 24h).
+              Anyone with the shared password. There is one login, so everything is
+              visible to everyone who has it.
+              Two accounts can monitor the same URL without ever seeing each other's
+              history, and the server rejects any request for data that is not yours.
             </p>
           </details>
+
+
+
 
           <details className={s.faq}>
             <summary className={s.faqQ}>Can I run this with a local LLM?</summary>
@@ -568,10 +729,10 @@ export default function HelpPage() {
           <details className={s.faq}>
             <summary className={s.faqQ}>How is my data stored?</summary>
             <p className={s.faqA}>
-              Everything is stored locally in a SQLite database file at the path set by
+              Everything is stored in a SQLite database on the server, at the path set by
               <code className={s.code}> DB_PATH</code> (default <code className={s.code}>backend/data/monitor.db</code>).
-              No data is sent anywhere except to the LLM API you configure and (optionally) the
-              Firecrawl, Brave, or Serper Search API.
+              Content leaves it only to reach the configured LLM API and, optionally, the
+              Firecrawl, Brave or Serper Search API.
             </p>
           </details>
 

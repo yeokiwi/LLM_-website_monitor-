@@ -1,0 +1,94 @@
+.bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #374151;
+}
+
+.select,
+.input {
+  padding: 7px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 0.86rem;
+  background: #fff;
+  color: #111827;
+}
+
+.select { min-width: 220px; }
+.input { flex: 1; min-width: 220px; max-width: 360px; }
+
+.select:focus,
+.input:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+}
+
+.match {
+  font-size: 0.83rem;
+  color: #4338ca;
+}
+
+.saveBtn,
+.cancelBtn {
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.saveBtn {
+  background: #fff;
+  color: #4338ca;
+  border: 1px solid #c7d2fe;
+}
+.saveBtn:hover:not(:disabled) { background: #eef2ff; }
+
+.cancelBtn {
+  background: #fff;
+  color: #374151;
+  border: 1px solid #d1d5db;
+}
+.cancelBtn:hover:not(:disabled) { background: #f3f4f6; }
+
+.saveBtn:disabled,
+.cancelBtn:disabled,
+.select:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.manage {
+  font-size: 0.83rem;
+  color: #6366f1;
+  text-decoration: none;
+  margin-left: auto;
+}
+.manage:hover { text-decoration: underline; }
+
+.notice .manage { margin-left: 4px; }
+
+.error,
+.notice {
+  margin: 0;
+  font-size: 0.84rem;
+}
+
+.error { color: #dc2626; }
+.notice { color: #15803d; }

@@ -12,17 +12,25 @@
 .headerInner {
   max-width: 1200px;
   margin: 0 auto;
-  height: 56px;
+  min-height: 56px;
   display: flex;
   align-items: center;
-  gap: 32px;
+  gap: 24px;
 }
-.logo { font-size: 1.1rem; font-weight: 700; letter-spacing: -0.3px; flex-shrink: 0; }
+.logo {
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  flex-shrink: 0;
+  color: #fff;
+  text-decoration: none;
+}
 
-.nav { display: flex; gap: 8px; }
+.nav { display: flex; gap: 8px; flex-shrink: 0; }
 .nav a {
   color: rgba(255,255,255,0.7);
   text-decoration: none;
+  white-space: nowrap;
   padding: 6px 14px;
   border-radius: 6px;
   font-size: 0.9rem;
@@ -107,9 +115,35 @@
 .userName {
   font-size: 0.82rem;
   color: rgba(255,255,255,0.7);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.userName:hover { color: #fff; }
+
+.userLabel {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.roleTag {
+  font-size: 0.66rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.15);
+  color: rgba(255,255,255,0.9);
 }
 
 .logoutBtn {
+  white-space: nowrap;
   padding: 5px 12px;
   background: rgba(255,255,255,0.1);
   border: 1px solid rgba(255,255,255,0.2);
@@ -131,3 +165,26 @@
   font-size: 0.95rem;
   color: #9ca3af;
 }
+
+/* Public header (pricing page when signed out). */
+.publicLink {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: rgba(255,255,255,0.75);
+  text-decoration: none;
+  padding: 8px 12px;
+}
+
+.publicLink:hover { color: #fff; }
+
+.publicCta {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #fff;
+  background: #6366f1;
+  border-radius: 8px;
+  padding: 8px 16px;
+  text-decoration: none;
+}
+
+.publicCta:hover { background: #4f46e5; }

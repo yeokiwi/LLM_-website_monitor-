@@ -474,3 +474,7 @@
   .featureGrid { grid-template-columns: 1fr; }
   .providerGrid { grid-template-columns: 1fr; }
 }
+
+/* Inline links inside body copy. */
+.link { color: #6366f1; text-decoration: none; font-weight: 600; }
+.link:hover { text-decoration: underline; }

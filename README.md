@@ -1,6 +1,8 @@
 # Website Monitor
 
-A web-based application that uses an LLM to monitor websites for changes over a user-defined time period. It stores snapshots of website content, diffs historical against current snapshots, and summarises what changed in plain English. Supports Claude (Anthropic), OpenAI, and **any OpenAI-compatible endpoint** — including local models via Ollama or LM Studio, and hosted services such as Groq, Together AI, Mistral AI, DeepSeek, and Perplexity.
+A self-hosted tool that uses an LLM to monitor websites for changes over a user-defined time period. It stores snapshots of website content, diffs historical against current snapshots, and summarises what changed in plain English. Supports Claude (Anthropic), OpenAI, and **any OpenAI-compatible endpoint** — including local models via Ollama or LM Studio, and hosted services such as Groq, Together AI, Mistral AI, DeepSeek, and Perplexity.
+
+One shared username and password, set in the server's environment, protect one shared set of monitored sites. There are no accounts to manage and nothing to bill.
 
 ---
 
@@ -26,11 +28,16 @@ A web-based application that uses an LLM to monitor websites for changes over a 
   - [4. Set environment variables](#4-set-environment-variables)
   - [5. Deploy](#5-deploy)
 - [Environment Variables](#environment-variables)
+- [Scheduled Scans & Email](#scheduled-scans--email)
+- [Testing](#testing)
 - [Using the Application](#using-the-application)
+  - [Signing in](#signing-in)
   - [Adding websites](#adding-websites)
   - [Importing websites from Excel](#importing-websites-from-excel)
   - [Running a scan](#running-a-scan)
+  - [Website groups](#website-groups)
   - [Viewing history](#viewing-history)
+  - [Backing up and restoring](#backing-up-and-restoring)
 - [Excel / CSV Import Format](#excel--csv-import-format)
 - [Scan Result Statuses](#scan-result-statuses)
 - [API Reference](#api-reference)
@@ -41,6 +48,8 @@ A web-based application that uses an LLM to monitor websites for changes over a 
 ## Overview
 
 Website Monitor lets you track what changes on any website over time without manual checking. Simply add the URLs you care about, choose a lookback period (e.g. "what changed in the last 30 days"), and trigger a scan. The application fetches current content, compares it against a stored snapshot from the chosen period, and asks an LLM to write a human-readable summary of the differences.
+
+It runs as a single-team tool: one shared username and password, set in the server's environment, protect one shared set of monitored sites. There is no signup and no per-user separation — anyone with the password sees everything.
 
 ---
 
@@ -53,6 +62,13 @@ Website Monitor lets you track what changes on any website over time without man
 - **Persistent snapshot storage** — every scan stores a content snapshot in SQLite so future scans always have a baseline to compare against
 - **Intelligent scan statuses** — skips LLM calls when content is unchanged; handles first-time scans gracefully
 - **Scan history page** — paginated log of all past scans with expandable LLM summaries
+- **One shared login** — a username and password from the environment, with no accounts to manage, no signup and nothing to reset
+- **Website groups** — save a named set of websites and scan it in one go, by hand or on a schedule
+- **Scheduled scans** — hourly, daily or weekly background scans of a group or a single website
+- **Email notifications** — one digest per scheduled group run to that group's recipients, on every run or only when something changed or failed
+- **Per-scan cost record** — LLM token counts and duration are stored on every scan row, so API spend can be totalled from the database
+- **PDF report export** — export every structured report on the scan history page to a single PDF file
+- **Backup and restore** — download the whole database as one file and restore it onto any instance, from the Backup page
 
 ---
 
@@ -76,7 +92,15 @@ Add websites  →  Choose period  →  Trigger scan
 
 **First scan:** A baseline snapshot is recorded. No comparison is possible yet — the app reports "First scan recorded" and waits for the next run.
 
-**Subsequent scans:** The app finds the oldest snapshot within the chosen period, diffs it against today's content, and sends both versions plus the diff to the LLM. If the content hash is identical, the LLM call is skipped and "No changes detected" is returned.
+**Subsequent scans:** The app takes the most recent snapshot at or before the start of the chosen period as its baseline, falling back to the oldest snapshot inside the period when there is nothing older. It diffs that against today's content and sends both versions plus the diff to the LLM. If the content hash is identical, the LLM call is skipped and "No changes detected" is returned.
+
+Snapshots store the **full** page or document content, gzip-compressed, and the content hash covers all of it — a change in the later sections of a long Act or PDF is detected like any other.
+
+**Detector engines vs. supplementary engines.** Firecrawl, the direct scraper and the PDF reader are *detectors*: they read the monitored page itself and decide whether it changed. Brave and Serper are *supplementary*: they query a search index, so their results appear in the report as related news and announcements but never set the scan's verdict on their own. A website configured with search engines only is given the direct scraper as well, so something is always reading the page. Search queries are scoped to the monitored page, so two pages on the same host do not receive identical results — Serper via `site:host/path`, Brave by exact phrase, because Brave's `site:` is documented for domains and subdomains only. The snapshot query is deliberately **not** filtered by recency: it answers "what is indexed here now", and filtering it would make the snapshot shrink on its own as entries age out. Recency filtering stays on the news and announcement passes.
+
+Providers can also refuse a query outright (HTTP 400 — free Serper accounts reject `inurl:`) or quietly match nothing with it (HTTP 200, no results). Both step down to a plainer query shape: a quoted URL, then domain-wide. A refusal is remembered per API key; an empty result is remembered per URL, since it says the *page* has no index entry rather than anything about the account. When the scope widens to the whole domain the report says so.
+
+**Failures are failures, not content.** A scrape that cannot produce trustworthy content — an exhausted search quota, an empty Firecrawl response, an unreachable page — records that engine as an error and writes no snapshot. Nothing is stored that would diff against the real page once the site recovers.
 
 ---
 
@@ -84,11 +108,11 @@ Add websites  →  Choose period  →  Trigger scan
 
 | Layer | Technology |
 |---|---|
-| Backend runtime | Node.js 18+ |
+| Backend runtime | Node.js 20+ |
 | Backend framework | Express 4 |
 | Database | SQLite via `better-sqlite3` (no server required) |
 | Web scraping | Firecrawl API · Brave Search API · Serper Search API · axios + cheerio (fallback) |
-| Excel / CSV parsing | SheetJS (`xlsx`) |
+| Excel / CSV parsing | SheetJS (`xlsx`), installed from the SheetJS CDN — see below |
 | File upload | multer |
 | Text diffing | `diff` (line-level) |
 | LLM — Claude | `@anthropic-ai/sdk` |
@@ -104,21 +128,47 @@ Add websites  →  Choose period  →  Trigger scan
 ```
 .
 ├── README.md
+├── .github/workflows/ci.yml    ← backend tests, frontend build, Docker build
 ├── backend/
 │   ├── .env.example            ← copy to .env and fill in keys
 │   ├── package.json
+│   ├── vitest.config.mjs
+│   ├── tests/                  ← auth, access, migration, scheduler, scraper,
+│   │                             snapshot, diff and scan-service suites
 │   └── src/
 │       ├── server.js           ← Express entry point
+│       ├── bootstrap.js        ← account seed, ownership migration
 │       ├── db/
-│       │   └── index.js        ← SQLite init & schema migrations
+│       │   ├── index.js        ← SQLite connection and pragmas
+│       │   └── migrations.js   ← schema + the one-time ownership rebuild
+│       ├── middleware/
+│       │   ├── auth.js         ← requireAuth
+│       │   └── rateLimit.js    ← per-IP caps; the login limit matters most
+│       ├── repositories/       ← all owner-scoped SQL lives here; the single
+│       │   │                     place a Postgres move would land
+│       │   ├── userRepo.js         websiteRepo.js    scanRepo.js
+│       │   ├── scheduleRepo.js     groupRepo.js      groupScheduleRepo.js
+│       │   └── settingsRepo.js
 │       ├── routes/
-│       │   ├── websites.js     ← CRUD endpoints for monitored sites
-│       │   ├── scans.js        ← scan orchestration & results
-│       │   └── upload.js       ← Excel / CSV upload endpoint
+│       │   ├── auth.js         ← the shared login
+│       │   ├── websites.js     ← CRUD for monitored sites
+│       │   ├── scans.js        ← scan results and triggering
+│       │   ├── schedules.js    ← automatic scan cadences
+│       │   ├── upload.js       ← Excel / CSV upload endpoint
+│       │   ├── groups.js       ← website groups and their schedules
+│       │   ├── settings.js     ← default recipients, test email
+│       │   └── database.js     ← backup and restore
 │       └── services/
-│           ├── scraper.js      ← Firecrawl / Brave / Serper API / axios+cheerio fallback
+│           ├── scanService.js      ← scan orchestration
+│           ├── scheduler.js        ← background scans and retention pruning
+│           ├── accountService.js   ← hashing, JWT, account seed
+│           ├── mailer.js           ← SMTP (logs when unconfigured)
+│           ├── emails.js           ← change alert, group digest, test message
+│           ├── notifications.js    ← who receives scheduled-scan email
+│           ├── scraper.js      ← Firecrawl / Brave / Serper / axios+cheerio
 │           ├── snapshotService.js  ← save / retrieve snapshots
 │           ├── diffService.js      ← compute line diff
+│           ├── reportPdf.js        ← markdown → PDF
 │           └── llmService.js       ← Claude / any OpenAI-compatible endpoint
 └── frontend/
     ├── index.html
@@ -126,18 +176,23 @@ Add websites  →  Choose period  →  Trigger scan
     ├── package.json
     └── src/
         ├── main.jsx
-        ├── App.jsx             ← router + header
+        ├── App.jsx             ← routing + header
         ├── api/
-        │   └── client.js       ← all backend API calls
+        │   └── client.js       ← all backend calls; 401 interceptor
+        ├── context/
+        │   ├── AuthContext.jsx ← is the session valid, and who is signed in
+        │   └── ScanContext.jsx ← batch scan progress across navigation
         ├── components/
-        │   ├── AddWebsiteForm.jsx
-        │   ├── ExcelUpload.jsx
-        │   ├── PeriodSelector.jsx
-        │   ├── WebsiteList.jsx
-        │   └── ScanResultCard.jsx
+        │   ├── AddWebsiteForm.jsx   ExcelUpload.jsx    PeriodSelector.jsx
+        │   ├── WebsiteList.jsx      ScanResultCard.jsx DataBackup.jsx
+        │   ├── GroupPicker.jsx      ← pick or save a group on the dashboard
+        │   └── ErrorBoundary.jsx    ← render errors show a message, not a blank page
         └── pages/
-            ├── Dashboard.jsx   ← main page
-            └── History.jsx     ← paginated scan history
+            ├── Dashboard.jsx        History.jsx        ReportPage.jsx
+            ├── LoginPage.jsx        SchedulesPage.jsx
+            ├── GroupsPage.jsx   ← create and edit groups and their recipients
+            ├── BackupPage.jsx   ← download a backup, restore from one
+            └── HelpPage.jsx
 ```
 
 ---
@@ -146,7 +201,7 @@ Add websites  →  Choose period  →  Trigger scan
 
 | Requirement | Version | Notes |
 |---|---|---|
-| Node.js | 18 or later | https://nodejs.org |
+| Node.js | 20 or later | https://nodejs.org — nodemailer 10 and React Router 7 require it; `engines` in both `package.json` files says so |
 | npm | 8 or later | bundled with Node.js |
 | LLM API key | — | One of: Anthropic, OpenAI, Groq, Together AI, Mistral, etc. — or none for local models (Ollama/LM Studio) |
 | Firecrawl API key | — | Optional — full-page markdown scraping, https://firecrawl.dev |
@@ -267,6 +322,14 @@ cd backend && npm install
 cd ../frontend && npm install
 ```
 
+**Why `xlsx` installs from a URL.** SheetJS stopped publishing to npm at 0.18.5,
+which has two known high-severity flaws (prototype pollution, CVE-2023-30533,
+and a ReDoS, CVE-2024-22363). Fixed releases are published only on the SheetJS
+CDN, so `backend/package.json` points at
+`https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz` and the lockfile pins its
+integrity hash — `npm ci` refuses anything else. The build therefore needs to
+reach `cdn.sheetjs.com` as well as the npm registry.
+
 ---
 
 ## Running the Application
@@ -275,7 +338,7 @@ Both the backend and frontend must be running at the same time. Open **two termi
 
 ### Development mode
 
-**Terminal 1 — backend** (auto-restarts on file changes):
+**Terminal 1 — backend** (auto-restarts on file changes, using Node's built-in `node --watch`):
 
 ```bash
 cd backend
@@ -286,7 +349,7 @@ Expected output:
 ```
 🚀 Website Monitor backend running on http://localhost:3001
    LLM provider : claude
-   LLM model    : claude-opus-4-6
+   LLM model    : claude-opus-5
    LLM base URL : https://api.anthropic.com
    Scraper      : Brave Search API
 ```
@@ -367,8 +430,8 @@ In your Railway service go to **Variables** and add:
 | Variable | Value |
 |---|---|
 | `NODE_ENV` | `production` |
-| `AUTH_USERNAME` | your chosen username (e.g. `admin`) |
-| `AUTH_PASSWORD` | your chosen password |
+| `AUTH_USERNAME` | the sign-in name (e.g. `admin`) |
+| `AUTH_PASSWORD` | the sign-in password — **required**, nobody can sign in without it |
 | `JWT_SECRET` | a long random string (generate with the command below) |
 | `JWT_EXPIRES_IN` | `24h` *(or `7d`, `30d`, etc.)* |
 | `LLM_PROVIDER` | `claude` *(or your chosen provider)* |
@@ -404,10 +467,16 @@ All variables are set in `backend/.env`.
 | Variable | Default | Required | Description |
 |---|---|---|---|
 | `PORT` | `3001` | No | Port the Express server listens on |
-| **`AUTH_USERNAME`** | `admin` | No | Login username |
-| **`AUTH_PASSWORD`** | — | **Yes** | Login password (no default — must be set) |
-| **`JWT_SECRET`** | `change-me-in-production` | **Yes** | Secret used to sign session tokens — use a long random string |
+| `APP_URL` | `http://localhost:5173` | For email | Public URL of the app. Used for links in change alerts, and the allowed CORS origin in production |
+| **`AUTH_USERNAME`** | `admin` | No | The sign-in name |
+| **`AUTH_PASSWORD`** | — | **Yes** | The sign-in password. Nobody can sign in until it is set; changing it takes effect on restart |
+| **`JWT_SECRET`** | `change-me-in-production` | **Yes** | Secret used to sign session tokens. The server refuses to start in production if this is unset or default |
 | **`JWT_EXPIRES_IN`** | `24h` | No | Session duration e.g. `12h`, `7d`, `30d` |
+| `DISABLE_RATE_LIMIT` | `false` | No | Turn off request rate limiting. Local development and tests only |
+| `ENABLE_SCHEDULER` | on in production | No | Run background scheduled scans |
+| `HISTORY_RETENTION_DAYS` | — | No | Delete scans and snapshot bodies older than this, swept daily. Unset keeps everything |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | — | No | Outgoing mail. Without `SMTP_HOST`, messages are logged instead of sent |
+| `LLM_TIMEOUT_MS` | `120000` | No | Give up on an LLM call after this long, so one hung request cannot stall a scheduled batch |
 | `LLM_PROVIDER` | `claude` | Yes | `claude` → Anthropic SDK. Any other value → OpenAI-compatible SDK |
 | `LLM_MODEL` | see below | No | Model name to use. Defaults to `claude-opus-4-6` (Claude) or `gpt-4o` (all others) |
 | `ANTHROPIC_API_KEY` | — | When `LLM_PROVIDER=claude` | API key from https://console.anthropic.com |
@@ -443,7 +512,133 @@ All variables are set in `backend/.env`.
 
 ---
 
+## Scheduled Scans & Email
+
+### Scheduled scans
+
+Background scans run in-process on a five-minute tick (`node-cron`), enabled by
+default in production and off elsewhere so `npm run dev` does not spend API
+credit. There is no queue or worker process: the deployment is a single
+container, and a broker would be infrastructure without a problem to solve.
+
+Two kinds of schedule run on that tick: a single website's, and a **group's**,
+which scans every active website in the group. Both are claimed by advancing
+`next_run_at` inside the same transaction that reads them, so a restart mid-scan
+**skips** the run rather than repeating it. A scan costs real money; running one
+twice is worse than missing one.
+
+A website is scanned at most **once per tick** for a given period, however many
+due schedules include it — a site in two groups, or in a group and on its own
+schedule, is paid for once and reported in each. Up to 25 website schedules and
+5 group runs are claimed per tick; anything left over stays due for the next.
+
+Every scan costs real money in LLM and scraper API calls, so pick the slowest
+cadence that still catches what you need. The token counts and duration of each
+scan are stored on its `scan_results` row, so spend can be totalled from the
+database.
+
+A daily job prunes history older than `HISTORY_RETENTION_DAYS`, blanking old
+snapshot bodies. Leave it unset to keep everything — but snapshot bodies are the
+bulk of the database, so on a long-running instance it is what stops the file
+growing without bound.
+
+### Email
+
+Any SMTP provider works (Resend, SendGrid, SES, Postmark, Mailgun). **When
+`SMTP_HOST` is unset, messages are logged instead of sent** — scanning keeps
+working, it just does not deliver mail. The Schedules page warns when this is the
+case.
+
+**Who receives it.** Recipients resolve in this order:
+
+1. the group's own recipient list (set on the Groups page);
+2. the **default recipients** (set at the top of the Schedules page);
+3. the sign-in account's address — only if it is a real one.
+
+With the shared login the account address is `<AUTH_USERNAME>@local` unless
+`AUTH_USERNAME` is itself an email address, and that placeholder is never
+mailed. **Before this, every alert went to it** — so if you had SMTP configured
+and never saw an alert, that is why. Set a default list.
+
+Each recipient gets their own copy, so addresses are not shown to each other.
+Use **Send test email** on the Schedules page to confirm delivery end to end.
+
+**What is sent.**
+
+- A scheduled **group** run sends one digest — never one email per site — whose
+  subject carries the outcome (`Statutes: 2 changed, 1 failed of 14 sites`) and
+  whose body lists every site with its status and a link to its report, changed
+  and failed sites first. Each group chooses *after every run* or *only when
+  something changed or a scan failed*; a failure counts because it means the
+  monitoring is not working.
+- A **single website's** schedule sends *changes detected* when it changes.
+- Scans you start yourself send nothing — the results are on screen.
+
+---
+
+## Upgrading from the subscription version
+
+If you are coming from the version with per-user accounts and billing, the
+change is picked up on first boot and needs no migration:
+
+- Sign-in moves back to `AUTH_USERNAME` / `AUTH_PASSWORD`. Unlike before, these
+  now **are** the credentials rather than a seed, so changing `AUTH_PASSWORD`
+  and restarting takes effect immediately.
+- The account that owned the data keeps owning it; nothing moves. If several
+  accounts had data, only the oldest account's is reachable — export the others
+  from the old version first if you need them.
+- `STRIPE_*`, `PAYPAL_*`, `BILLING_GRACE_DAYS` and `REQUIRE_EMAIL_VERIFICATION`
+  are no longer read and can be removed.
+- The `plans`, `subscriptions`, `usage_counters`, `payments` and
+  `webhook_events` tables are still created but never written to. Dropping
+  tables in SQLite is one-way, so they are simply left alone.
+
+---
+
+## Testing
+
+```bash
+cd backend
+npm test          # vitest, ~200 tests
+npm run test:watch
+```
+
+Each suite runs against its own throwaway SQLite file. Coverage concentrates on
+the things that would be expensive to get wrong:
+
+| Suite | What it pins |
+|---|---|
+| `tests/auth.test.js` | The shared login: right credentials in, everything else out, and a token required everywhere past `/api/auth` |
+| `tests/access.test.js` | Owner-scoped reads, and that no protected route answers without a token |
+| `tests/migration.test.js` | The ownership rebuild against a realistic legacy database |
+| `tests/scheduler.test.js` | Claiming due work exactly once, and the schedule lifecycle |
+| `tests/groupScheduler.test.js` | Real ticks: group runs, one scan per site per tick, digests and who receives them |
+| `tests/groups.test.js` | Group and notification-settings API, and membership following website removal |
+| `tests/database.test.js` | Backup and restore round-trips, re-owning, and older backups still restoring |
+| `tests/snapshotService.test.js` | Baseline selection and full-content storage |
+| `tests/scraper.test.js` | Search normalisation, page scoping, and failures that throw rather than being snapshotted |
+| `tests/scanService.test.js` | Engine resolution and row-level status aggregation |
+| `tests/diffService.test.js` | Diff truncation being explicit rather than silent |
+
+CI (`.github/workflows/ci.yml`) runs the backend tests, the frontend build, and
+a Docker build of the production image on every push.
+
+---
+
 ## Using the Application
+
+### Signing in
+
+There is one login for the whole deployment, set by whoever runs it with
+`AUTH_USERNAME` and `AUTH_PASSWORD`. There is no signup, no password reset and
+no per-user separation: anyone with the password sees every monitored site and
+every report, and can add, scan and delete.
+
+Credentials are compared against the environment, not against anything stored in
+the database, so rotating the password is a config change and a restart. The
+login endpoint is rate limited per IP — with a single shared password, that is
+what makes brute-forcing impractical, so leave `DISABLE_RATE_LIMIT` off in
+production.
 
 ### Adding websites
 
@@ -468,9 +663,64 @@ See [Excel / CSV Import Format](#excel--csv-import-format) for the expected file
 3. Click **Scan Selected**.
 4. Results appear below the table as expandable cards, one per website.
 
+### Website groups
+
+A group is a named, saved set of websites — say, every statute page one team owns.
+
+- **Create one** by ticking websites on the Dashboard and choosing **Save
+  selection as group**, or with **New group** on the **Groups** page.
+- **Scan it by hand**: pick it from the **Group** menu on the Dashboard (its
+  websites are selected) and click **Scan Selected**, or click **Scan now** on
+  the Groups page.
+- **Scan it on a schedule**: give it a cadence and a monitoring period on the
+  **Schedules** page, and set who is emailed on the Groups page.
+
+A website can belong to any number of groups. Deleting a group never deletes its
+websites or their history; removing a website takes it out of every group.
+
 ### Viewing history
 
 Click **Scan History** in the navigation bar to see a paginated log of every scan that has ever been run, with statuses and LLM summaries.
+
+Use **Export reports (PDF)** in the top-right of the page to download all of the structured reports currently in view (the search filter is respected) as a single PDF file.
+
+### Backing up and restoring
+
+Click **Backup** in the navigation bar.
+
+**Download full backup (.db)** gives you a SQLite file holding every website,
+group, snapshot, scan and schedule. It is what you restore from, and it is also just a
+database — open it in any SQLite tool and read it.
+
+It carries **no sign-in credentials**. The username and password come from
+`AUTH_USERNAME` / `AUTH_PASSWORD` in the server's environment rather than from
+the database, so the password hash in the file is inert; it is blanked on the way
+out regardless, along with the rows left behind by the removed billing tables.
+
+**Download my data (.json)** is the readable alternative — websites and scan
+reports as JSON, for reading somewhere else. It is not restorable.
+
+**Restore** replaces everything. Every website, group, snapshot, scan and schedule on
+the instance is dropped and reloaded from the backup, so anything added since the
+backup was taken is lost. The page asks you to type `replace all data` before the
+button does anything, because the only way back is the `<DB_PATH>.bak-<timestamp>`
+file the server writes beside the database first — and recovering from that means
+server access, not a click in the app.
+
+A backup restores onto **any** instance, whatever its login is: every restored row
+is re-assigned to the account doing the restore. Without that, a backup moved
+between instances lands owned by an account id that does not exist there, and the
+dashboard comes up empty with nothing reporting an error.
+
+One thing a backup will not do is merge. If the file holds the same URL under two
+different accounts, those cannot collapse onto one account — websites are unique
+per owner and URL — so the restore is refused and names the URLs rather than
+quietly dropping rows.
+
+The **default recipients** set on the Schedules page are this instance's
+configuration and are kept as they are: restoring someone else's backup should
+not redirect your alerts to their recipients. Groups' own recipient lists do come
+across with the groups.
 
 ---
 
@@ -495,25 +745,51 @@ The file must have a header row. Column names are case-insensitive.
 | Status | Meaning |
 |---|---|
 | **Changes Found** | Differences detected between the old and new snapshots; LLM summary is shown. |
+| **Partial** | At least one engine failed while another produced a report. The report is real but incomplete; the failing engine and its error are recorded on the scan. |
 | **No Changes** | Content hash is identical to the baseline snapshot; no LLM call was made. |
-| **First Scan** | No historical snapshot existed in the chosen period; a baseline has now been stored. Run the scan again later to see changes. |
+| **First Scan** | No usable historical snapshot existed for this engine; a baseline has now been stored. Run the scan again later to see changes. |
 | **Error** | The website could not be fetched, or the LLM call failed. The error message is displayed. |
+
+Per-engine outcomes are stored as JSON on `scan_results.engine_statuses`, so a **Partial** scan says which engine failed without that being buried in the report text.
+
+### After upgrading
+
+Snapshots taken before this version were truncated at 14,000 characters and stored search results in an unnormalised form, so they cannot be compared against current ones without reporting the whole page as changed. They are not used as baselines. Each website reports **First Scan** once after the upgrade and then resumes normal comparison.
 
 ---
 
 ## API Reference
 
-All endpoints are prefixed with `/api`.
+All endpoints are prefixed with `/api`. Everything except `/api/health` and
+`/api/auth/*` requires a bearer token.
+
+Reads and writes are scoped to the account that owns the data. An id belonging
+to another owner returns **404**, never 403 — a 403 would confirm the row
+exists.
+
+Status codes worth handling: **401** not signed in · **404** not found.
+
+### Authentication
+
+| Method | Path | Body / Params | Description |
+|---|---|---|---|
+| `POST` | `/api/auth/login` | `{ username, password }` | Sign in with the shared credentials |
+| `GET` | `/api/auth/me` | — | The signed-in username |
+| `POST` | `/api/auth/logout` | — | Client-side only |
 
 ### Websites
 
 | Method | Path | Body / Params | Description |
 |---|---|---|---|
-| `GET` | `/api/websites` | — | List all active monitored websites |
-| `POST` | `/api/websites` | `{ url, name? }` | Add a single website |
-| `POST` | `/api/websites/bulk` | `{ websites: [{url, name?}] }` | Add multiple websites at once |
+| `GET` | `/api/websites` | — | The caller's active websites |
+| `POST` | `/api/websites` | `{ url, name?, domain?, srms_owner?, srms? }` | Add a website |
+| `POST` | `/api/websites/bulk` | `{ websites: [{url, name?}] }` | Add many; the whole batch is checked up front |
+| `PATCH` | `/api/websites/:id` | `{ use_firecrawl?, use_brave?, use_serper?, remark?, name? }` | Update engine flags / remark / name |
 | `DELETE` | `/api/websites/:id` | — | Remove (deactivate) a website |
-| `GET` | `/api/websites/:id` | — | Get a website with its recent scans |
+| `POST` | `/api/websites/bulk-delete` | `{ ids: number[] }` | Remove many |
+| `POST` | `/api/websites/bulk-update` | `{ ids?, updates }` | Apply engine flags; omitting `ids` targets the caller's own sites |
+| `GET` | `/api/websites/export` | — | Export the caller's websites as `.xlsx` |
+| `GET` | `/api/websites/:id` | — | One website with its recent scans |
 
 ### Scans
 
@@ -521,20 +797,55 @@ All endpoints are prefixed with `/api`.
 |---|---|---|---|
 | `POST` | `/api/scans` | `{ websiteIds: number[], periodDays: number }` | Trigger a scan |
 | `GET` | `/api/scans` | `?limit=20&offset=0` | Paginated scan history |
+| `GET` | `/api/scans/export-pdf` | `?ids=1,2,3` (optional) | Export the caller's reports as one PDF |
 | `GET` | `/api/scans/:id` | — | Single scan result |
+| `PATCH` | `/api/scans/:id` | `{ remark }` | Save a remark on a scan |
 | `GET` | `/api/scans/website/:websiteId` | — | All scans for one website |
 
-### Upload
+### Schedules
+
+| Method | Path | Body / Params | Description |
+|---|---|---|---|
+| `GET` | `/api/schedules` | — | Current schedules and the available cadences |
+| `PUT` | `/api/schedules/:websiteId` | `{ frequency, periodDays?, isEnabled? }` | Create or update a schedule |
+| `DELETE` | `/api/schedules/:websiteId` | — | Stop scanning automatically |
+
+### Groups
+
+| Method | Path | Body / Params | Description |
+|---|---|---|---|
+| `GET` | `/api/groups` | — | Groups with their active member ids, recipients and schedule, plus the available cadences |
+| `POST` | `/api/groups` | `{ name, websiteIds, notifyEmails?, notifyOn? }` | Create a group. Unknown website ids are a 400 naming them |
+| `PATCH` | `/api/groups/:id` | any of the above | Change only the fields given |
+| `DELETE` | `/api/groups/:id` | — | Delete the grouping; websites and history stay |
+| `PUT` | `/api/groups/:id/schedule` | `{ frequency, periodDays?, isEnabled? }` | Create or update the group's schedule |
+| `DELETE` | `/api/groups/:id/schedule` | — | Stop scanning the group automatically |
+
+`notifyEmails` takes an array or text separated by commas, semicolons or newlines.
+`notifyOn` is `changes` (changes or failures; the default) or `always`.
+
+### Settings
 
 | Method | Path | Body | Description |
 |---|---|---|---|
-| `POST` | `/api/upload` | `multipart/form-data` field `file` | Parse an Excel/CSV file and return `{ count, websites }` |
+| `GET` | `/api/settings/notifications` | — | `{ defaultEmails, smtpConfigured, accountEmail, accountEmailUsable }` |
+| `PUT` | `/api/settings/notifications` | `{ defaultEmails }` | Set the default recipients |
+| `POST` | `/api/settings/notifications/test` | `{ emails? }` | Send a test message to the default list (or `emails`) and report per address whether SMTP accepted it |
+
+### Data
+
+| Method | Path | Body | Description |
+|---|---|---|---|
+| `POST` | `/api/upload` | `multipart/form-data` field `file` | Parse an Excel/CSV file |
+| `GET` | `/api/database/my-data` | — | Websites and scans as readable JSON. Not restorable |
+| `GET` | `/api/database/export` | — | The whole SQLite file, with credentials removed |
+| `POST` | `/api/database/import` | `?confirm=replace-all-data` + `multipart/form-data` field `file` | Replace **all** data with a backup, re-owned to the caller |
 
 ### Utility
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/health` | Returns `{ status, llmProvider, llmModel, llmBaseUrl, scraperMethod }` |
+| `GET` | `/api/health` | `{ status, llmProvider, llmModel, llmBaseUrl, scraperMethod, schedulerEnabled }` |
 
 ---
 
@@ -559,8 +870,37 @@ Double-check that `OPENAI_API_KEY` contains the correct API key for that provide
 - The target website may be blocking automated requests. Try enabling Firecrawl (`FIRECRAWL_API_KEY`), which renders the page and returns clean markdown, or a search API — Brave (`BRAVE_API_KEY`) or Serper (`SERPER_API_KEY`) — which uses indexed content rather than direct HTTP fetches.
 - Check that the URL includes the `https://` prefix and is publicly accessible.
 
+**Every scan fails with `no such table: main.websites_legacy`**
+This affected instances whose database predates the owner column and was
+upgraded by an earlier build: the upgrade left `snapshots` and `scan_results`
+keyed to a table it then dropped, so no scan could be saved. Current builds
+repair it automatically on start — look for `Repaired foreign keys on
+scan_results, snapshots` in the log. A copy of the database is written to
+`<DB_PATH>.bak-pre-reference-repair-<timestamp>` first, and no rows or ids are
+changed. Nothing needs doing beyond deploying.
+
 **Frontend shows "Failed to load websites"**
 Confirm the backend is running on port `3001`. The Vite dev server proxies `/api` requests to `http://localhost:3001` automatically.
+
+**`Refusing to start in production — JWT_SECRET is unset or still the default`**
+Generate one and set it: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`. The check only fails the boot when `NODE_ENV=production`; elsewhere it warns.
+
+**Scheduled scans run but no email arrives**
+- `SMTP_HOST` may be unset, in which case messages are logged rather than sent — look for `📧 [mail not configured]` in the server output. The Schedules page also says so.
+- There may be nobody to send to. Set **default recipients** on the Schedules page, or recipients on the group; a log line reading `there is nobody to tell` means this. The `<AUTH_USERNAME>@local` sign-in address is never mailed.
+- Use **Send test email** on the Schedules page: it reports, per address, whether your mail server accepted the message.
+
+**Sign-in returns 500 "Server is not configured for authentication"**
+`AUTH_PASSWORD` is not set. The server refuses to let anyone in rather than treating an unset password as a match.
+
+**Sign-in returns 401 with the password you just changed**
+The password is read from the environment at request time, but the process has to pick up the new value — restart the server (or redeploy) after changing `AUTH_PASSWORD`.
+
+**Everything returns 429**
+The rate limiter is keyed per client IP: 20 sign-in attempts per 15 minutes, 120 API requests per minute. Behind a proxy that does not set `X-Forwarded-For`, every request looks like one client.
+
+**Scheduled scans never run**
+`ENABLE_SCHEDULER` defaults to on only in production. Set `ENABLE_SCHEDULER=true` elsewhere. `GET /api/health` reports `schedulerEnabled`.
 
 **Not sure which LLM is active?**
 Call `GET /api/health`. The response includes `llmProvider`, `llmModel`, and `llmBaseUrl` so you can confirm the exact configuration that is in use.

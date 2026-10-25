@@ -1,12 +1,21 @@
 import React, { useState } from 'react';
-import { login } from '../api/client';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+import { errorMessage } from '../api/client';
 import s from './LoginPage.module.css';
 
-export default function LoginPage({ onLogin }) {
+export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  const { login } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  // Where the auth guard sent us from, so a deep link survives signing in.
+  const destination = location.state?.from?.pathname || '/';
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -14,10 +23,10 @@ export default function LoginPage({ onLogin }) {
     setLoading(true);
 
     try {
-      const data = await login(username, password);
-      onLogin(data.token, data.username);
+      await login(username, password);
+      navigate(destination, { replace: true });
     } catch (err) {
-      setError(err.response?.data?.error || 'Login failed. Please try again.');
+      setError(errorMessage(err, 'Sign in failed. Please try again.'));
     } finally {
       setLoading(false);
     }
