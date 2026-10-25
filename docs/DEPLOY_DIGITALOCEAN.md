@@ -97,6 +97,9 @@ At your DNS provider (or **Networking → Domains** in DigitalOcean), create an
 |---|---|---|
 | A | `monitor` (for `monitor.example.com`) or `@` | `203.0.113.10` |
 
+> **No domain?** A free afraid.org subdomain works too. See
+> [domain.md](../domain.md).
+
 Check that it resolves **before** you start the stack. Caddy needs the name to
 point at the droplet to get a certificate:
 
