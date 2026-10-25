@@ -30,8 +30,9 @@ const scheduler = require('./services/scheduler');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Behind Railway's proxy, so the client IP the rate limiter keys on comes from
-// X-Forwarded-For rather than the socket.
+// Behind one reverse proxy (Railway's, or Caddy in docker-compose.yml), so the
+// client IP the rate limiter keys on comes from X-Forwarded-For rather than the
+// socket.
 app.set('trust proxy', 1);
 
 // ---------------------------------------------------------------------------

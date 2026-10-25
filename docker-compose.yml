@@ -1,0 +1,69 @@
+# Single-host production deployment (e.g. a DigitalOcean droplet).
+#
+#   app   — the Website Monitor image built from ./Dockerfile (API + frontend)
+#   caddy — reverse proxy in front of it; obtains and renews a Let's Encrypt
+#           certificate automatically when DOMAIN is a real hostname
+#
+# Configuration comes from ./.env (copy .env.production.example). See
+# docs/DEPLOY_DIGITALOCEAN.md for the full walkthrough.
+
+services:
+  app:
+    build: .
+    image: website-monitor:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Fixed by the image layout; not meant to be overridden from .env.
+      NODE_ENV: production
+      PORT: 3001
+      DB_PATH: /data/monitor.db
+    volumes:
+      # The SQLite database lives on the droplet's disk, outside the container,
+      # so rebuilding or recreating the container keeps every website and scan.
+      - ./data:/data
+    # No published ports: only Caddy can reach the app. The rate limiter trusts
+    # one proxy hop for the client IP, so the app must not be exposed directly.
+    expose:
+      - "3001"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      # A hostname (monitor.example.com) gets automatic HTTPS. ":80" serves
+      # plain HTTP on the droplet's IP, for trying it out before DNS is set up.
+      DOMAIN: ${DOMAIN:-:80}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  # Holds the TLS certificates; keeping it avoids hitting Let's Encrypt rate
+  # limits by re-issuing on every restart.
+  caddy_data:
+  caddy_config:

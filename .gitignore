@@ -13,6 +13,8 @@ backend/public/
 
 # ── SQLite database ───────────────────────────────────────────────────────────
 backend/data/
+# docker-compose.yml bind mount (database and backups)
+/data/
 *.db
 *.db-shm
 *.db-wal
