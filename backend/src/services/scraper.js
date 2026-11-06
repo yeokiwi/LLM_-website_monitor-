@@ -440,20 +440,72 @@ async function isPdfUrl(url) {
   }
 }
 
-async function scrapePdf(url) {
-  const response = await axios.get(url, {
-    responseType: 'arraybuffer',
-    timeout: 30000,
-    maxRedirects: 5,
-    maxContentLength: MAX_PDF_BYTES,
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (compatible; WebMonitor/1.0; +https://github.com/website-monitor)',
-      Accept: 'application/pdf,*/*',
-    },
-  });
+// Opens the body of every snapshot that holds a fingerprint instead of text.
+const PDF_TEXT_UNREADABLE = '[PDF text could not be extracted';
+const PDF_TEXT_EMPTY = '[PDF contained no extractable text]';
 
-  const buffer = Buffer.from(response.data);
+/**
+ * Whether a PDF snapshot holds only a byte fingerprint, not the document text.
+ *
+ * Such a snapshot must not be diffed against one that holds text: the diff
+ * would read as the whole document being deleted, or added back.
+ */
+function isPdfFingerprintOnly(contentText) {
+  const text = contentText || '';
+  return text.includes(`\n${PDF_TEXT_UNREADABLE}`) || text.includes(`\n${PDF_TEXT_EMPTY}`);
+}
+
+/**
+ * Check that a download is a PDF before it is snapshotted.
+ *
+ * Sites behind bot protection answer an automated request with 200 and an HTML
+ * challenge or "access denied" page, or with an empty body. Snapshotting that
+ * reported the document as deleted, then as wholly re-added once the site
+ * served it again.
+ */
+function assertPdfBody(url, response, buffer) {
+  if (buffer.length === 0) {
+    throw new ScrapeError(`${url} returned an empty response instead of the PDF`, {
+      provider: 'pdf',
+    });
+  }
+
+  // The spec allows bytes before the header; readers accept it within 1 KB.
+  if (buffer.subarray(0, 1024).includes('%PDF-')) return;
+
+  const type = String(response.headers?.['content-type'] || 'unknown type').split(';')[0];
+  const head = buffer.subarray(0, 4096).toString('utf8');
+  const title = head.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]?.trim();
+  throw new ScrapeError(
+    `${url} returned ${type} (${buffer.length} bytes${title ? `, "${title.slice(0, 100)}"` : ''}) ` +
+      'instead of a PDF. The site may be blocking automated downloads.',
+    { provider: 'pdf' }
+  );
+}
+
+async function scrapePdf(url) {
+  let response;
+  try {
+    response = await axios.get(url, {
+      responseType: 'arraybuffer',
+      timeout: 30000,
+      maxRedirects: 5,
+      maxContentLength: MAX_PDF_BYTES,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (compatible; WebMonitor/1.0; +https://github.com/website-monitor)',
+        Accept: 'application/pdf,*/*',
+      },
+    });
+  } catch (err) {
+    throw new ScrapeError(`Failed to download the PDF at ${url}: ${describeError(err)}`, {
+      provider: 'pdf',
+      cause: err,
+    });
+  }
+
+  const buffer = Buffer.from(response.data || []);
+  assertPdfBody(url, response, buffer);
 
   // Attempt text extraction, but never let a parse failure (encrypted,
   // image-only or malformed PDFs) abort the scan — a snapshot must always be
@@ -496,9 +548,7 @@ async function scrapePdf(url) {
   } else {
     const fingerprint = crypto.createHash('sha256').update(buffer).digest('hex');
     body = [
-      parseError
-        ? `[PDF text could not be extracted: ${parseError}]`
-        : '[PDF contained no extractable text]',
+      parseError ? `${PDF_TEXT_UNREADABLE}: ${parseError}]` : PDF_TEXT_EMPTY,
       `Bytes: ${buffer.length}`,
       `Content fingerprint: ${fingerprint}`,
     ].join('\n');
@@ -989,6 +1039,7 @@ module.exports = {
   resetQueryVariantCache,
   scrapePdf,
   isPdfUrl,
+  isPdfFingerprintOnly,
   extractDomain,
   resolveScraperProvider,
   ScrapeError,

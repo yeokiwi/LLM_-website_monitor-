@@ -912,6 +912,15 @@ Double-check that `OPENAI_API_KEY` contains the correct API key for that provide
 - The target website may be blocking automated requests. Try enabling Firecrawl (`FIRECRAWL_API_KEY`), which renders the page and returns clean markdown, or a search API — Brave (`BRAVE_API_KEY`) or Serper (`SERPER_API_KEY`) — which uses indexed content rather than direct HTTP fetches.
 - Check that the URL includes the `https://` prefix and is publicly accessible.
 
+**A PDF scan fails with "returned text/html … instead of a PDF" or "empty response"**
+The site answered the monitor's download with something other than the PDF,
+usually a bot-protection or "access denied" page, even though the file opens in a
+browser. The scan is recorded as an error and nothing is saved, so the next
+successful scan still compares against the last real copy of the document.
+Earlier builds saved that page as if it were the PDF and reported the document
+as deleted. If it keeps happening, the site is blocking the server's IP address
+or automated downloads in general.
+
 **Every scan fails with `no such table: main.websites_legacy`**
 This affected instances whose database predates the owner column and was
 upgraded by an earlier build: the upgrade left `snapshots` and `scan_results`

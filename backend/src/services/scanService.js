@@ -12,7 +12,14 @@
  */
 
 const db = require('../db');
-const { scrapeWithProvider, scrapePdf, isPdfUrl, availableEngines } = require('./scraper');
+const {
+  scrapeWithProvider,
+  scrapePdf,
+  isPdfUrl,
+  isPdfFingerprintOnly,
+  availableEngines,
+  ScrapeError,
+} = require('./scraper');
 const {
   saveSnapshot,
   snapshotText,
@@ -327,6 +334,25 @@ async function runSingleScan(website, periodDays, triggeredBy = 'manual') {
   };
 }
 
+// How far back to look for a PDF snapshot that holds text.
+const PDF_BASELINE_LOOKBACK = 50;
+
+/**
+ * The latest earlier PDF snapshot that holds the document text, or undefined.
+ *
+ * Skips snapshots that hold only a fingerprint. Older builds saved one when the
+ * site served an error page instead of the PDF, and diffing real text against
+ * it reported the whole document as added.
+ */
+function findPdfTextBaseline(websiteId, beforeId) {
+  let candidate = getPreviousSnapshot(websiteId, beforeId, 'pdf');
+  for (let i = 0; candidate && i < PDF_BASELINE_LOOKBACK; i += 1) {
+    if (!isPdfFingerprintOnly(snapshotText(candidate))) return candidate;
+    candidate = getPreviousSnapshot(websiteId, candidate.id, 'pdf');
+  }
+  return undefined;
+}
+
 /**
  * PDF scan — the URL points to a PDF document. Only the document text is
  * scanned, and it is compared against the previous scan's snapshot so the
@@ -347,9 +373,28 @@ async function runPdfScan(website, periodDays, triggeredBy, ledger, startedAt) {
   try {
     const { contentText, source, pages } = await scrapePdf(website.url);
 
+    // Text is compared only with text and a fingerprint only with a fingerprint;
+    // across the two, the diff reads as the whole document deleted or added.
+    let oldSnapshot;
+    if (isPdfFingerprintOnly(contentText)) {
+      const previous = getPreviousSnapshot(website.id, Number.MAX_SAFE_INTEGER, 'pdf');
+      if (previous && !isPdfFingerprintOnly(snapshotText(previous))) {
+        // Not saved, so the next readable scan still compares with the last text.
+        throw new ScrapeError(
+          `The PDF at ${website.url} downloaded, but its text could not be read this time, ` +
+            'although earlier scans read it. It was not compared, to avoid reporting the ' +
+            'document as deleted.',
+          { provider: 'pdf' }
+        );
+      }
+      oldSnapshot = previous;
+    }
+
     newSnapshot = saveSnapshot(website.id, contentText, 'pdf');
 
-    const oldSnapshot = getPreviousSnapshot(website.id, newSnapshot.id, 'pdf');
+    if (!isPdfFingerprintOnly(contentText)) {
+      oldSnapshot = findPdfTextBaseline(website.id, newSnapshot.id);
+    }
 
     if (!oldSnapshot) {
       const { markdown, usage } = await summarizeChanges({
